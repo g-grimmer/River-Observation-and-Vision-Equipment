@@ -1,0 +1,10 @@
+# Association par distance normalisee a la taille (voir detection/river_tracker.py).
+# Regime day : deplacement mesure 1.38 fois la taille de l'objet entre deux trames.
+tracker_type: river
+track_high_thresh: 0.15
+track_low_thresh: 0.05
+new_track_thresh: 0.20
+track_buffer: 30          # 10 s a 3 img/s
+match_thresh: 0.8         # 0.8 x max_move_ratio = 3,2 tailles d'objet
+fuse_score: False         # concu pour une similarite IoU, sans objet ici
+max_move_ratio: 6.0

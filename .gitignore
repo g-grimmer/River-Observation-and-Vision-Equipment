@@ -1,0 +1,7 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+logs/
+videos/
+data_pipeline/

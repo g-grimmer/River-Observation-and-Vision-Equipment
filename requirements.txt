@@ -1,0 +1,40 @@
+# Versions épinglées sur celles réellement validées sur le terrain (Pi 5,
+# Debian 13 trixie, Python 3.13) au 14/07/2026 -- avant, aucune version n'était
+# fixée et setup_agent.sh fait un `rm -rf .venv` destructif avant chaque
+# réinstallation : un remplacement de Pi dans plusieurs mois aurait pu
+# installer des versions incompatibles (API ultralytics/.track()/persist,
+# formats Results, etc. peuvent changer entre versions majeures).
+#
+# numpy n'est pas listé ici : fourni par le paquet système (apt) grâce à
+# `python3 -m venv --system-site-packages` dans setup_agent.sh (nécessaire pour
+# picamera2/libcamera) -- numpy==2.2.4 au 14/07/2026 sur la Pi de référence ;
+# épinglé quand même ci-dessous pour psutil/pyserial afin de ne pas dépendre
+# uniquement de ce flag si la création du venv change un jour.
+# paho-mqtt retiré : dépendance non utilisée nulle part dans le code (aucun
+# usage MQTT actuel).
+# ncnn est le backend d'inference reellement utilise en production (les deux
+# modeles sont des exports *_ncnn_model). Il n'etait pas liste : Ultralytics
+# appelait alors `pip install ncnn` a chaud au premier chargement du modele, ce
+# qui imposait un telechargement par la 4G a chaque demarrage a froid et faisait
+# echouer l'initialisation quand le lien n'etait pas encore monte.
+# Roue officielle cp313/aarch64 (manylinux_2_28) disponible pour la Pi 5.
+# Si l'on veut eviter que pip resolve ses dependances declarees (numpy, tqdm,
+# requests, portalocker, opencv-python non borne), l'installer a part :
+#   pip install --no-deps ncnn==1.0.20260526
+ncnn==1.0.20260526
+
+# lap : solveur d'affectation lineaire utilise par l'association de ByteTrack,
+# donc par RiverTracker. Meme probleme que ncnn : absent du fichier, Ultralytics
+# le telechargeait a chaud au premier import des trackers, en avertissant qu'il
+# fallait relancer le process pour que la mise a jour prenne effet.
+# Observe en conditions reelles le 01/10/2026 a la premiere mise en service.
+lap==0.5.13
+
+opencv-python==5.0.0.93
+psutil==7.0.0
+ultralytics==8.4.90
+pandas==3.0.3
+paramiko==5.0.0
+onnx==1.22.0
+onnxruntime==1.27.0
+pyserial==3.5
