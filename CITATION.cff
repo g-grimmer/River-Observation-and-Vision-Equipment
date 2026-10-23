@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Grimmer"
+  given-names: "Gauthier"
+  orcid: "https://orcid.org/0009-0002-9818-3599" 
+- family-names: "Wenger"
+  given-names: "Romain"
+  orcid: "https://orcid.org/0000-0001-7557-6862"
+- family-names: "Carmier"
+  given-names: "Morgane"
+- family-names: "Rixhon"
+  given-names: "Gilles"
+  orcid: "https://orcid.org/0000-0002-2109-7142"
+- family-names: "Forestier"
+  given-names: "Germain"
+  orcid: "https://orcid.org/0000-0002-4960-7554"
+- family-names: "Chardon"
+  given-names: "Valentin"
+  orcid: "https://orcid.org/0000-0001-7169-2057"
+title: "ROV-E:River-Observation-and-Vision-Equipment"
+version: 1.0.0
+doi: 
+date-released: 2026-10-23
+url: "https://github.com/g-grimmer/River-Observation-and-Vision_Equipment"
