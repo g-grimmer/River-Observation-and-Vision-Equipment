@@ -1,29 +1,28 @@
 from ultralytics import YOLO
 from utils.configs import TRACKER_CONFIG_PATH
 
-# L'import enregistre le type de tracker `river` aupres d'Ultralytics.
+# Importing this module registers the `river` tracker type with Ultralytics.
 from detection import river_tracker  # noqa: F401
 
 class YoloDetector:
     def __init__(self, model_path, conf, imgsz=None, tracker=None):
         self.model = YOLO(model_path)
         self.conf = conf
-        # Le reglage de suivi depend du regime : voir TRACKER_CONFIG_DAY/NIGHT.
+        # The tracking settings depend on the regime: see TRACKER_CONFIG_DAY/NIGHT.
         self.tracker = tracker or TRACKER_CONFIG_PATH
-        # Les exports NCNN sont figes a leur resolution d'entrainement (960).
-        # Sans imgsz explicite, Ultralytics retombe sur son defaut de 640 et
-        # le modele travaille hors de la resolution pour laquelle il a ete
-        # entraine -- perte de rappel sur les petits objets, qui sont ici la
-        # quasi-totalite des cibles.
+        # NCNN exports are frozen at their training resolution (960). Without an
+        # explicit imgsz, Ultralytics falls back to its own 640 default and the
+        # model runs outside the resolution it was trained for -- a loss of
+        # recall on small objects, which are here almost all of the targets.
         self.imgsz = imgsz
 
     def predict(self, frame):
-        # Utilisation de TRACK pour le suivi (ByteTrack par défaut ou spécifié)
-        # persist=True est important pour maintenir les IDs entre les frames
-        # TRACKER_CONFIG_PATH est ancré sur BASE_DIR (utils/configs.py) : un
-        # chemin relatif ici dépendait du répertoire courant du process, pas de
-        # l'emplacement du dépôt -- cassait avec un FileNotFoundError si l'agent
-        # était lancé manuellement depuis un autre répertoire.
+        # TRACK is used rather than PREDICT (ByteTrack by default, or the one given).
+        # persist=True matters: it is what keeps identities alive between frames.
+        # TRACKER_CONFIG_PATH is anchored on BASE_DIR (utils/configs.py): a relative
+        # path here depended on the process working directory rather than on the
+        # repository location -- it failed with a FileNotFoundError whenever the
+        # agent was launched by hand from another directory.
         kw = dict(conf=self.conf, persist=True,
                   tracker=self.tracker, verbose=False)
         if self.imgsz:

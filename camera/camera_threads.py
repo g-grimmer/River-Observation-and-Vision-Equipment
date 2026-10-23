@@ -63,10 +63,11 @@ class CameraThread(threading.Thread):
     def enable(self):
         """Start streaming (allocate buffers/start sensor).
 
-        L'échec de picam.start() est relogué puis RE-LEVÉ : avant, il était avalé
-        ici, ce qui empêchait le try/except protecteur de main.py::select_camera()
-        de jamais voir un échec de démarrage (seul un échec de construction était
-        visible). is_streaming ne passe à True que si start() a réellement réussi.
+        A failure of picam.start() is logged and then RE-RAISED: it used to be
+        swallowed here, which prevented the protective try/except in
+        main.py::select_camera() from ever seeing a start-up failure (only a
+        construction failure was visible). is_streaming only becomes True if
+        start() genuinely succeeded.
         """
         if not self.is_streaming:
             print(f"🟢 Activating Camera {self.cam_id}")
@@ -89,15 +90,15 @@ class CameraThread(threading.Thread):
                 print(f"⚠️ Error stopping camera {self.cam_id}: {e}")
 
     def capture_high_res_image(self, save_path):
-        """ Capture une image haute résolution via l'ISP matériel.
-        Le format JPEG est inféré automatiquement depuis l'extension .jpg.
+        """ Capture a high-resolution image through the hardware ISP.
+        The JPEG format is inferred automatically from the .jpg extension.
         """
         try:
             if self.is_streaming:
-                self.picam.capture_file(save_path)  # format inféré depuis l'extension
+                self.picam.capture_file(save_path)  # format inferred from the extension
                 return True
         except Exception as e:
-            print(f"⚠️ Erreur capture hi-res: {e}")
+            print(f"⚠️ Hi-res capture error: {e}")
         return False
 
     def run(self):
@@ -109,20 +110,20 @@ class CameraThread(threading.Thread):
         while self.running:
             if self.is_streaming:
                 try:
-                    # Capture un flux basse résolution pour l'IA sans bloquer le main (Goulot I/O fix)
+                    # Grab a low-resolution frame for the AI without blocking main (I/O bottleneck fix)
                     frame = self.picam.capture_array("lores")
                     
-                    # Cadence alignée sur CAPTURE_FPS (= VIDEO_FPS = 3 img/s).
-                    # On vise une échéance plutôt qu'un sleep fixe : avec un sleep
-                    # constant, le temps de capture s'ajoute à la période et la
-                    # cadence réelle dérive sous la consigne.
+                    # Rate aligned on CAPTURE_FPS (= VIDEO_FPS = 3 fps).
+                    # A deadline is targeted rather than a fixed sleep: with a
+                    # constant sleep the capture time adds to the period and the
+                    # real rate drifts below the set point.
                     next_t += period
                     delay = next_t - time.monotonic()
                     if delay > 0:
                         time.sleep(delay)
                     else:
-                        # Retard pris (capture lente) : on repart de maintenant
-                        # plutôt que d'accumuler une dette et de rafaler ensuite.
+                        # Running late (slow capture): restart from now rather
+                        # than accumulating a debt and then bursting.
                         next_t = time.monotonic()
                     
                     # FPS Calculation
@@ -134,10 +135,10 @@ class CameraThread(threading.Thread):
                         t_start = now
 
                     if self.queue.full():
-                        # File pleine : on jette la plus ANCIENNE plutôt que de
-                        # perdre la plus récente. Pour du débris qui dérive vite
-                        # dans le courant, mieux vaut analyser l'image la plus
-                        # fraîche possible qu'une frame déjà périmée.
+                        # Queue full: drop the OLDEST rather than lose the most
+                        # recent one. For debris drifting fast in the current, it
+                        # is better to analyse the freshest frame available than
+                        # an already stale one.
                         try:
                             self.queue.get_nowait()
                         except Exception:

@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger("DiskCleaner")
 
 def get_disk_usage(path="/"):
-    """Renvoie le pourcentage d'utilisation du disque contenant `path`."""
+    """Return the usage percentage of the filesystem holding `path`."""
     try:
         total, used, free = shutil.disk_usage(path)
         return (used / total) * 100.0
@@ -15,27 +15,27 @@ def get_disk_usage(path="/"):
 
 def cleanup_old_files(directories, max_usage_percent=80.0, target_usage_percent=75.0):
     """
-    Vérifie l'espace disque. Si > max_usage_percent, supprime les fichiers les plus anciens
-    dans les répertoires spécifiés jusqu'à atteindre target_usage_percent.
+    Check free space. Above max_usage_percent, delete the oldest files in the
+    given directories until target_usage_percent is reached.
     """
     usage = get_disk_usage()
     if usage < max_usage_percent:
-        return  # Rien à faire
+        return  # nothing to do
 
-    logger.warning(f"[DiskCleaner] Alerte espace disque : {usage:.1f}% (Seuil: {max_usage_percent}%). Début du nettoyage...")
+    logger.warning(f"[DiskCleaner] Disk space alert: {usage:.1f}% (threshold: {max_usage_percent}%). Starting cleanup...")
 
-    # Récupérer tous les fichiers .mp4, .jpg, .csv dans les dossiers -- glob
-    # RÉCURSIF (contrairement à avant) pour inclure <dossier>/failed/, où
-    # sftp_manager._move_to_failed() déplace les fichiers ayant épuisé leurs
-    # tentatives d'upload (MAX_UPLOAD_ATTEMPTS). Ce sous-dossier était jusqu'ici
-    # invisible à ce nettoyeur et pouvait grossir indéfiniment, sur la même
-    # partition que l'OS, sans jamais être réclamé par ce garde-fou anti-saturation.
+    # Collect every .mp4, .jpg and .csv file in the directories -- the glob is
+    # RECURSIVE (unlike before) so that <directory>/failed/ is included, where
+    # sftp_manager._move_to_failed() parks files that exhausted their upload
+    # attempts (MAX_UPLOAD_ATTEMPTS). That subdirectory used to be invisible to
+    # this cleaner and could grow without bound, on the same partition as the OS,
+    # never reclaimed by this very anti-saturation safeguard.
     all_files = []
     for d in directories:
         for ext in ("*.mp4", "*.jpg", "*.csv"):
             all_files.extend(glob.glob(os.path.join(d, "**", ext), recursive=True))
 
-    # Filtrer les fichiers qui ne peuvent pas être lus
+    # Drop the files that cannot be read
     valid_files = []
     for f in all_files:
         try:
@@ -43,7 +43,7 @@ def cleanup_old_files(directories, max_usage_percent=80.0, target_usage_percent=
         except OSError:
             pass
 
-    # Trier du plus vieux au plus récent
+    # Sort from oldest to newest
     valid_files.sort(key=lambda x: x[1])
 
     deleted_count = 0
@@ -58,10 +58,10 @@ def cleanup_old_files(directories, max_usage_percent=80.0, target_usage_percent=
             os.remove(filepath)
             reclaimed_bytes += size
             deleted_count += 1
-            logger.info(f"[DiskCleaner] Supprimé (vieux): {os.path.basename(filepath)}")
+            logger.info(f"[DiskCleaner] Deleted (oldest): {os.path.basename(filepath)}")
         except Exception as e:
-            logger.error(f"[DiskCleaner] Échec suppression {filepath}: {e}")
+            logger.error(f"[DiskCleaner] Could not delete {filepath}: {e}")
 
-    logger.warning(f"[DiskCleaner] Nettoyage terminé. {deleted_count} fichiers supprimés. "
-                   f"Espace récupéré: {reclaimed_bytes / (1024*1024):.1f} MB. "
-                   f"Nouvelle utilisation: {get_disk_usage():.1f}%")
+    logger.warning(f"[DiskCleaner] Cleanup finished. {deleted_count} files deleted. "
+                   f"Space reclaimed: {reclaimed_bytes / (1024*1024):.1f} MB. "
+                   f"New usage: {get_disk_usage():.1f}%")

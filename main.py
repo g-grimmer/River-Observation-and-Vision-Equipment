@@ -31,15 +31,15 @@ from utils.alerting import write_alert
 # ---------------------------------------------------------------------------
 # Upload modes
 # ---------------------------------------------------------------------------
-# 'video'          : comportement original — upload vidéo si détections
-# 'snapshot'       : Option A — pas de vidéo, seulement JPEG à chaque détection
-# 'video+snapshot' : Option B — vidéo enregistrée en local, JPEG uploadé sur 4G
+# 'video'          : original behaviour -- upload the video if there were detections
+# 'snapshot'       : Option A -- no video, only a JPEG per detection
+# 'video+snapshot' : Option B -- video recorded locally, JPEG uploaded over 4G
 # ---------------------------------------------------------------------------
 
-# Secondes sans frame valide avant de considérer la caméra "active" comme morte
-# et de forcer une reconnexion (voir select_camera()). Très supérieur au délai
-# de production normal d'une frame (file de 2 + capture ~8 FPS) pour ne jamais
-# se déclencher sur un simple ralentissement de l'inférence IA.
+# Seconds without a valid frame before the "active" camera is considered dead
+# and a reconnection is forced (see select_camera()). Far above the normal
+# production delay of a frame (queue of 2 + capture at ~8 FPS) so that it never
+# fires on a mere slowdown of the AI inference.
 CAMERA_HEALTH_TIMEOUT = 15
 
 class VideoRecorder(threading.Thread):
@@ -67,7 +67,7 @@ class VideoRecorder(threading.Thread):
             try:
                 frame = self.queue.get(timeout=0.2)
                 if frame is not None:
-                    # On écrit directement la frame, c'est à l'appelant de fournir du BGR
+                    # The frame is written as-is; it is up to the caller to supply BGR
                     self.writer.write(frame)
             except queue.Empty:
                 continue
@@ -95,8 +95,8 @@ class TestAgent:
         # Modules
         self.sftp = SFTPManager()
 
-        # Watchdog 4G — surveille la connectivité et tente de récupérer
-        # le modem sans reboot en cas de freeze (LEDs rouges figées)
+        # 4G watchdog -- monitors connectivity and tries to recover the modem
+        # without rebooting when it freezes (steady red LEDs)
         self.modem_watchdog = ModemWatchdog(sftp_manager=self.sftp)
         self.modem_watchdog.start()
         self.logger = None
@@ -107,19 +107,19 @@ class TestAgent:
         self.session_ts = ""
         self.start_time = time.time()
 
-        # Pose : voir utils/configs.py
+        # Pose: see utils/configs.py
         self.camera_model = Camera(resolution_px=FRAME_SIZE)
         self.camera_model.set_focal_length_and_sensor(
             focal_length=CAMERA_FOCALE_MM, sensor_size=CAMERA_CAPTEUR_MM)
         self.camera_model.position = [0.0, CAMERA_HAUTEUR_M, 0.0]
         self.camera_model.pitch_deg = CAMERA_TANGAGE_DEG
 
-        # AI — bascule jour/nuit automatique (cam 0 diurne / cam 1 nocturne),
-        # désactivée si --model impose un modèle fixe (tests manuels/bench).
+        # AI -- automatic day/night switch (cam 0 diurnal / cam 1 nocturnal),
+        # disabled when --model forces a fixed model (manual tests / bench).
         self.model_override = model_override
-        # Calcule avant le if : `is_day` est relu plus bas pour le tracker, hors
-        # de toute branche. Defini seulement dans le else, il levait un
-        # NameError des que --model etait passe.
+        # Computed before the if: `is_day` is read again below for the tracker,
+        # outside any branch. Defined only in the else, it raised a NameError as
+        # soon as --model was passed.
         is_day = est_jour()
         if model_override:
             self.actual_model_path = model_override
@@ -139,11 +139,11 @@ class TestAgent:
         signal.signal(signal.SIGTERM, self.stop_signal)
 
         mode_labels = {
-            'video': 'Vidéo (upload vidéo si détections)',
-            'snapshot': 'Snapshot (JPEG par détection, pas de vidéo)',
-            'video+snapshot': 'Vidéo locale + Snapshot 4G (JPEG par détection)',
+            'video': 'Video (upload the video if there were detections)',
+            'snapshot': 'Snapshot (one JPEG per detection, no video)',
+            'video+snapshot': 'Local video + 4G snapshot (one JPEG per detection)',
         }
-        print(f"📡 Mode upload : {mode_labels.get(self.upload_mode, self.upload_mode)}")
+        print(f"📡 Upload mode: {mode_labels.get(self.upload_mode, self.upload_mode)}")
 
     # -----------------------------------------------------------------------
     # Snapshot
@@ -151,13 +151,13 @@ class TestAgent:
 
     def _save_detection_snapshot(self, results):
         """
-        Capture un JPEG haute résolution via l'ISP hardware de picamera2
-        et l'uploade sur le NAS. Un seul snapshot par track ID unique par session.
+        Capture a high-resolution JPEG through the picamera2 hardware ISP and
+        upload it to the NAS. One snapshot per unique track ID per session.
         """
         if results.boxes is None or results.boxes.id is None:
             return
 
-        # Filtrer les nouveaux track IDs uniquement
+        # Keep only the new track IDs
         track_ids = [int(tid) for tid in results.boxes.id.tolist()]
         new_ids = [tid for tid in track_ids if tid not in self.snapshotted_track_ids]
         if not new_ids:
@@ -169,14 +169,14 @@ class TestAgent:
             snap_filename = f"cam{self.active_cam_idx}_{ts}_snap.jpg"
             snap_path = os.path.join(VIDEO_DIR, snap_filename)
 
-            # --- Capture via array pour éviter le deadlock picamera2 ---
-            # Utiliser capture_file pendant qu'on lit déjà des arrays "main" crée un deadlock libcamera
+            # --- Capture through an array, to avoid the picamera2 deadlock ---
+            # Using capture_file while already reading "main" arrays deadlocks libcamera
             hires = self.active_cam_thread.picam.capture_array("main")
-            # La caméra sort du BGR, OpenCV attend du BGR. Aucune conversion.
+            # The camera outputs BGR and OpenCV expects BGR. No conversion.
             cv2.imwrite(snap_path, hires, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-            # --- Annotation : boîtes de détection scalées sur la hi-res ---
-            # Charger le JPEG qui vient d'être sauvegardé
+            # --- Annotation: detection boxes scaled onto the hi-res image ---
+            # Load the JPEG that has just been saved
             frame = cv2.imread(snap_path)
             if frame is not None:
                 h_hi, w_hi = frame.shape[:2]
@@ -199,7 +199,7 @@ class TestAgent:
                     cv2.putText(frame, label, (x1_h, max(y1_h - 10, 40)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
 
-                # Timestamp en overlay
+                # Timestamp overlay
                 ts_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 cv2.putText(frame, f"Cam{self.active_cam_idx} | {ts_str}",
                             (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 220, 255), 3)
@@ -207,7 +207,7 @@ class TestAgent:
                 cv2.imwrite(snap_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 55])
 
             size_kb = os.path.getsize(snap_path) / 1024
-            print(f"📸 Snapshot: {snap_filename} ({size_kb:.0f} KB) — Track IDs: {new_ids}")
+            print(f"📸 Snapshot: {snap_filename} ({size_kb:.0f} KB) -- Track IDs: {new_ids}")
             self.sftp.upload_file(snap_path)
 
         except Exception as e:
@@ -220,15 +220,15 @@ class TestAgent:
     # -----------------------------------------------------------------------
 
     def _uses_video(self):
-        """True si ce mode enregistre une vidéo localement."""
+        """True if this mode records a video locally."""
         return self.upload_mode in ('video', 'video+snapshot', 'bench')
 
     def _handle_video_on_close(self, old_video):
         """
-        Gère le sort d'un fichier vidéo en fin de session selon le mode.
-        - 'video'          : upload si détections (ou keep_all), sinon supprime
-        - 'video+snapshot' : garde toujours en local, n'uploade jamais
-        - 'snapshot'       : old_video est None, ne fait rien
+        Decide the fate of a video file at the end of a session, per mode.
+        - 'video'          : upload if there were detections (or keep_all), else delete
+        - 'video+snapshot' : always kept locally, never uploaded
+        - 'snapshot'       : old_video is None, nothing to do
         """
         if not old_video:
             return
@@ -237,25 +237,25 @@ class TestAgent:
             if self.session_has_detections or self.keep_all_videos:
                 self.sftp.upload_file(old_video)
                 if self.keep_all_videos and not self.session_has_detections:
-                    print(f"📁 Vidéo conservée (keep-all): {os.path.basename(old_video)}")
+                    print(f"📁 Video kept (keep-all): {os.path.basename(old_video)}")
             else:
                 try:
                     os.remove(old_video)
-                    print(f"🗑️ Vidéo supprimée (pas de détections): {os.path.basename(old_video)}")
+                    print(f"🗑️ Video deleted (no detections): {os.path.basename(old_video)}")
                 except Exception as e:
-                    print(f"⚠️ Impossible de supprimer {os.path.basename(old_video)}: {e}")
+                    print(f"⚠️ Could not delete {os.path.basename(old_video)}: {e}")
 
         elif self.upload_mode == 'video+snapshot':
-            # La vidéo reste en local, jamais uploadée sur 4G
-            print(f"💾 Vidéo conservée en local: {os.path.basename(old_video)}")
+            # The video stays local, never uploaded over 4G
+            print(f"💾 Video kept locally: {os.path.basename(old_video)}")
 
     # -----------------------------------------------------------------------
     # Session management
     # -----------------------------------------------------------------------
 
     def _rotate_session(self):
-        """Ferme la session courante et en démarre une nouvelle."""
-        print(f"🔄 Rotation de session (Cam {self.active_cam_idx})...")
+        """Close the current session and start a new one."""
+        print(f"🔄 Session rotation (Cam {self.active_cam_idx})...")
 
         old_video = self.recorder.filename if self.recorder else None
         old_logger = self.logger.path if self.logger else None
@@ -269,21 +269,21 @@ class TestAgent:
         self._handle_video_on_close(old_video)
         if old_logger: self.sftp.upload_file(old_logger)
         if old_perf: self.sftp.upload_file(old_perf)
-        # La fiche de pose part avec les donnees qu'elle documente.
+        # The pose record travels with the data it documents.
         if old_meta: self.sftp.upload_file(old_meta)
 
-        # Nettoyage automatique du disque pour éviter la saturation 24/7
+        # Automatic disk cleanup, to avoid 24/7 saturation
         cleanup_old_files([VIDEO_DIR, LOG_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
         self._start_session()
 
     def _start_session(self):
-        """Démarre une nouvelle session d'enregistrement et de logs."""
+        """Start a new recording and logging session."""
         self.session_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.start_time = time.time()
-        self.snapshotted_track_ids = set()  # Reset des IDs snapshotés
+        self.snapshotted_track_ids = set()  # Reset the snapshotted IDs
 
-        # Extraction du dossier (ex: 'model_fusion_26s') et du nom ('best_ncnn_model')
+        # Extract the folder (e.g. 'model_fusion_26s') and the name ('best_ncnn_model')
         import os
         model_dir = os.path.basename(os.path.dirname(self.actual_model_path))
         model_file = os.path.splitext(os.path.basename(self.actual_model_path))[0]
@@ -301,8 +301,8 @@ class TestAgent:
         self.logger = CSVLogger(log_path)
         self.perf_logger = PerformanceLogger(perf_path)
 
-        # Fiche de session : sans la pose, les tailles en metres du CSV ne
-        # peuvent plus etre recalculees apres un demontage.
+        # Session record: without the pose, the sizes in metres in the CSV can
+        # no longer be recomputed after the mount is dismantled.
         self.session_meta_path = os.path.join(LOG_DIR, f"{pref}_session.json")
         write_session_metadata(
             self.session_meta_path, self.camera_model, self.actual_model_path,
@@ -311,7 +311,7 @@ class TestAgent:
         # Update tracker
         self.tracker = ObjectTracker(self.logger)
 
-        # Init Recorder (uniquement en mode vidéo)
+        # Init Recorder (video modes only)
         if self._uses_video():
             video_path = os.path.join(VIDEO_DIR, f"{pref}.{VIDEO_EXTENSION}")
             self.recorder = VideoRecorder(video_path, HI_RES_SIZE, VIDEO_FPS, VIDEO_CODEC)
@@ -323,32 +323,31 @@ class TestAgent:
         self.session_has_detections = False
 
     def select_camera(self):
-        """Sélectionne la caméra 0 en régime diurne, la caméra 1 la nuit.
+        """Select camera 0 in the diurnal regime, camera 1 at night.
 
-        La plage est définie par est_jour() (utils/configs.py) : 7h-19h le jour,
-        19h-7h la nuit.
+        The window is defined by est_jour() (utils/configs.py): 07:00-19:00 by
+        day, 19:00-07:00 at night.
         """
         now = datetime.datetime.now()
         target_idx = 0 if est_jour(now) else 1
 
-        # Vérification de santé de la caméra déjà active, indépendamment du
-        # changement jour/nuit : sans ça, une caméra qui meurt EN COURS de
-        # fonctionnement (câble CSI délogé, alimentation instable) n'était plus
-        # jamais re-détectée avant le prochain changement de créneau (jusqu'à
-        # 7h ou 19h) puisque tout le bloc suivant ne s'exécute que si
-        # active_cam_idx != target_idx.
+        # Health check of the already active camera, independently of the
+        # day/night switch: without it, a camera dying WHILE running (CSI cable
+        # dislodged, unstable power) was never detected again before the next
+        # window change (up to 07:00 or 19:00), since the whole block below only
+        # runs when active_cam_idx != target_idx.
         if (self.active_cam_idx == target_idx and self.active_cam_thread is not None
                 and time.time() - self.last_valid_frame_ts > CAMERA_HEALTH_TIMEOUT):
             print(
-                f"❌ Caméra {self.active_cam_idx} muette depuis plus de "
-                f"{CAMERA_HEALTH_TIMEOUT}s — reconnexion forcée."
+                f"❌ Camera {self.active_cam_idx} silent for more than "
+                f"{CAMERA_HEALTH_TIMEOUT}s -- forcing a reconnection."
             )
             self.active_cam_thread.stop()
             self.active_cam_thread = None
-            self.active_cam_idx = -1  # force la reconstruction ci-dessous
+            self.active_cam_idx = -1  # force the rebuild below
 
         if self.active_cam_idx != target_idx:
-            print(f"🔄 Passage à la Caméra {target_idx} (heure: {now.hour}h)")
+            print(f"🔄 Switching to camera {target_idx} (hour: {now.hour}h)")
 
             if self.recorder or self.logger:
                 old_video = self.recorder.filename if self.recorder else None
@@ -363,55 +362,55 @@ class TestAgent:
                 if old_logger: self.sftp.upload_file(old_logger)
                 if old_perf: self.sftp.upload_file(old_perf)
 
-                # Nettoyage automatique du disque
+                # Automatic disk cleanup
                 cleanup_old_files([VIDEO_DIR, LOG_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
             if self.active_cam_thread:
                 self.active_cam_thread.stop()
                 self.active_cam_thread = None
 
-            # Init caméra protégée : une caméra absente/débranchée ne doit jamais
-            # faire crasher tout l'agent — elle sera retentée au prochain check (60s).
+            # Protected camera init: a missing or unplugged camera must never
+            # crash the whole agent -- it is retried at the next check (60s).
             try:
                 new_cam_thread = CameraThread(CAMERA_IDS[target_idx], FRAME_SIZE, HI_RES_SIZE)
                 new_cam_thread.start()
                 new_cam_thread.enable()
             except Exception as e:
-                print(f"❌ Caméra {target_idx} indisponible ({e}) — nouvelle tentative dans 60s.")
+                print(f"❌ Camera {target_idx} unavailable ({e}) -- retrying in 60s.")
                 self.active_cam_thread = None
                 self.active_cam_idx = -1
                 self.camera_fail_count += 1
-                # Alerte au bout de ~5min, ~30min, puis toutes les heures — évite de
-                # spammer le NAS à chaque tentative tout en gardant une trace remontée.
+                # Alert after ~5 min, ~30 min, then hourly -- avoids spamming the
+                # NAS on every attempt while still leaving a remote trace.
                 if self.camera_fail_count in (5, 30) or self.camera_fail_count % 60 == 0:
                     alert_path = write_alert(
                         "camera",
-                        f"Caméra {target_idx} indisponible depuis {self.camera_fail_count} "
-                        f"tentatives consécutives (~{self.camera_fail_count} min) : {e}"
+                        f"Camera {target_idx} unavailable for {self.camera_fail_count} "
+                        f"consecutive attempts (~{self.camera_fail_count} min): {e}"
                     )
                     if alert_path and not self.sftp.upload_file(alert_path):
-                        print(f"⚠️ Alerte caméra non mise en file (queue pleine) : {alert_path}")
+                        print(f"⚠️ Camera alert not queued (queue full): {alert_path}")
                 return
 
             self.camera_fail_count = 0
             self.active_cam_thread = new_cam_thread
             self.active_cam_idx = target_idx
-            # Repart d'une horloge fraîche : évite de redéclencher immédiatement
-            # le contrôle de santé avant que la nouvelle caméra n'ait eu le temps
-            # de produire sa première frame.
+            # Restart from a fresh clock: avoids re-triggering the health check
+            # immediately, before the new camera has had time to produce its
+            # first frame.
             self.last_valid_frame_ts = time.time()
 
-            # Bascule automatique du modèle IA jour/nuit (sauf --model fixe)
+            # Automatic day/night AI model switch (unless --model is fixed)
             if not self.model_override:
                 target_model_path = MODEL_PATH_DAY if target_idx == 0 else MODEL_PATH_NIGHT
                 target_tracker = TRACKER_CONFIG_DAY if target_idx == 0 else TRACKER_CONFIG_NIGHT
                 if target_model_path != self.actual_model_path:
-                    print(f"🧠 Changement de modèle IA : {target_model_path}")
+                    print(f"🧠 Switching AI model: {target_model_path}")
                     try:
-                        # imgsz et tracker doivent être transmis ici aussi : sans
-                        # imgsz, Ultralytics retombait sur 640 après la première
-                        # bascule et le modèle 960 travaillait hors résolution,
-                        # sans le moindre message.
+                        # imgsz and tracker must be passed here too: without
+                        # imgsz, Ultralytics fell back to 640 after the first
+                        # switch and the 960 model ran out of its resolution,
+                        # without a single message.
                         new_detector = YoloDetector(target_model_path, CONFIDENCE,
                                                     imgsz=IMGSZ, tracker=target_tracker)
                         self.detector = new_detector
@@ -419,8 +418,8 @@ class TestAgent:
                         self.actual_tracker = target_tracker
                     except Exception as e:
                         print(
-                            f"❌ Impossible de charger {target_model_path} ({e}) — "
-                            f"on continue avec {self.actual_model_path}."
+                            f"❌ Could not load {target_model_path} ({e}) -- "
+                            f"carrying on with {self.actual_model_path}."
                         )
 
             time.sleep(1.0)
@@ -438,15 +437,15 @@ class TestAgent:
 
     def run(self):
         mode_str = {
-            'video': f"Production vidéo (rotation {ROTATION_MINUTES}min)",
-            'snapshot': "Snapshot uniquement (JPEG par détection, pas de vidéo)",
-            'video+snapshot': f"Vidéo locale + Snapshot 4G (rotation {ROTATION_MINUTES}min)",
-            'bench': "Benchmark HardwareX (Logs exhaustifs + Vidéo annotée)",
+            'video': f"Video production (rotation every {ROTATION_MINUTES} min)",
+            'snapshot': "Snapshot only (one JPEG per detection, no video)",
+            'video+snapshot': f"Local video + 4G snapshot (rotation every {ROTATION_MINUTES} min)",
+            'bench': "HardwareX benchmark (exhaustive logs + annotated video)",
         }.get(self.upload_mode, self.upload_mode)
         if self.upload_mode == 'video' and self.keep_all_videos:
-            mode_str += " | CONSERVATION SYSTÉMATIQUE"
+            mode_str += " | KEEP EVERYTHING"
 
-        print(f"🚀 Agent démarré | Mode: {mode_str}")
+        print(f"🚀 Agent started | Mode: {mode_str}")
         last_cam_check = 0
         last_perf_log = 0
         fatal_error = False
@@ -455,7 +454,7 @@ class TestAgent:
             while self.running:
                 now = time.time()
 
-                # Vérifier la caméra toutes les minutes
+                # Check the camera every minute
                 if now - last_cam_check > 60:
                     self.select_camera()
                     last_cam_check = now
@@ -464,53 +463,53 @@ class TestAgent:
                     time.sleep(0.1)
                     continue
 
-                # --- ROTATION (pour uploader les CSV et vidéos selon le mode) ---
+                # --- ROTATION (to upload the CSV files and videos per mode) ---
                 if now - self.start_time > (ROTATION_MINUTES * 60):
                     self._rotate_session()
 
-                # 1. Capture lores pour l'IA
+                # 1. Lores capture for the AI
                 lores_frame = self.active_cam_thread.read()
                 if lores_frame is None:
                     time.sleep(0.005)
                     continue
 
-                self.last_valid_frame_ts = now  # alimente le contrôle de santé de select_camera()
+                self.last_valid_frame_ts = now  # feeds the health check of select_camera()
                 self.frame_id += 1
 
-                # 2. Capture hi-res pour l'enregistrement vidéo (mode vidéo uniquement)
+                # 2. Hi-res capture for video recording (video modes only)
                 if self.recorder:
                     try:
                         hires_frame = self.active_cam_thread.picam.capture_array("main")
-                        # La caméra sort du BGR, la vidéo attend du BGR. Aucune conversion.
+                        # The camera outputs BGR and the video expects BGR. No conversion.
                         self.recorder.write(hires_frame)
                     except Exception as e:
-                        print(f"⚠️ Erreur capture main frame: {e}")
+                        print(f"⚠️ Main frame capture error: {e}")
 
-                # 3. Inférence IA. Ultralytics inverse lui-même les canaux dans
-                # Predictor.preprocess() (`im = im[..., ::-1]  # BGR to RGB`) :
-                # il attend donc du BGR, exactement ce que sort la caméra.
-                # Convertir en RGB ici faisait parvenir au réseau des canaux
-                # inversés -- sans erreur visible, mais avec un modèle dégradé.
+                # 3. AI inference. Ultralytics swaps the channels itself in
+                # Predictor.preprocess() (`im = im[..., ::-1]  # BGR to RGB`):
+                # it therefore expects BGR, exactly what the camera outputs.
+                # Converting to RGB here fed the network inverted channels --
+                # with no visible error, but with a degraded model.
                 t_inf_start = time.time()
                 results = self.detector.predict(lores_frame)[0]
                 inf_ms = (time.time() - t_inf_start) * 1000
 
-                # 4. Détection confirmée par ByteTrack
+                # 4. Detection confirmed by ByteTrack
                 if results.boxes.id is not None:
                     if not self.session_has_detections:
                         detected_classes = (
                             [int(cls) for cls in results.boxes.cls.tolist()]
                             if hasattr(results.boxes, 'cls') else []
                         )
-                        print(f"👁️ ByteTrack a confirmé des objets (Classes: {detected_classes}).")
+                        print(f"👁️ ByteTrack confirmed objects (classes: {detected_classes}).")
                         if self.upload_mode == 'video':
-                            print(f"   → Vidéo marquée pour upload SFTP.")
+                            print(f"   -> Video marked for SFTP upload.")
                         elif self.upload_mode in ('snapshot', 'video+snapshot'):
-                            print(f"   → Snapshot JPEG en cours...")
+                            print(f"   -> Writing the JPEG snapshot...")
 
                     self.session_has_detections = True
 
-                    # Snapshot JPEG (modes snapshot et video+snapshot)
+                    # JPEG snapshot (snapshot and video+snapshot modes)
                     if self.upload_mode in ('snapshot', 'video+snapshot'):
                         self._save_detection_snapshot(results)
 
@@ -545,27 +544,27 @@ class TestAgent:
                           f"Snaps: {len(self.snapshotted_track_ids)} | {wd_status}")
 
         except Exception as e:
-            print(f"🔥 Erreur fatale dans la boucle principale: {e}")
+            print(f"🔥 Fatal error in the main loop: {e}")
             import traceback
             traceback.print_exc()
             fatal_error = True
-            # Avant, seuls les chemins caméra/modem déclenchaient une alerte : un
-            # bug logiciel qui crash-loop en continu (exactement le scénario que
-            # ce mécanisme d'alerte doit couvrir) ne produisait aucun signal
-            # distant. Limité à un fichier marqueur horodaté (pas un compteur en
-            # mémoire) car chaque crash recrée une toute nouvelle instance de
-            # TestAgent -- un compteur d'instance ne survivrait pas au redémarrage.
+            # Before, only the camera and modem paths raised an alert: a software
+            # bug crash-looping continuously (exactly the scenario this alert
+            # mechanism is meant to cover) produced no remote signal at all.
+            # Limited by a timestamped marker file (not an in-memory counter)
+            # because every crash creates a brand new TestAgent instance -- an
+            # instance counter would not survive the restart.
             if self._should_alert_fatal():
-                alert_path = write_alert("fatal", f"Erreur fatale dans la boucle principale : {e}")
+                alert_path = write_alert("fatal", f"Fatal error in the main loop: {e}")
                 if alert_path and not self.sftp.upload_file(alert_path):
-                    print(f"⚠️ Alerte fatale non mise en file (queue pleine) : {alert_path}")
+                    print(f"⚠️ Fatal alert not queued (queue full): {alert_path}")
         finally:
             self.stop()
 
         if fatal_error:
-            # Code de sortie non-nul : run_agent.sh distingue un vrai crash
-            # d'un arrêt volontaire (Ctrl+C/SIGTERM -> exit 0) et applique son
-            # propre backoff au lieu de laisser systemd seul relancer en boucle.
+            # Non-zero exit code: run_agent.sh distinguishes a real crash from a
+            # deliberate stop (Ctrl+C/SIGTERM -> exit 0) and applies its own
+            # backoff instead of leaving systemd alone to restart in a loop.
             sys.exit(1)
 
     # -----------------------------------------------------------------------
@@ -573,11 +572,10 @@ class TestAgent:
     # -----------------------------------------------------------------------
 
     def _should_alert_fatal(self, min_interval=300):
-        """Limite la fréquence des alertes 'fatal' à travers les redémarrages
-        du process (chaque crash recrée une toute nouvelle instance de
-        TestAgent, donc un compteur en mémoire ne suffit pas) via un fichier
-        marqueur horodaté. Par défaut, au plus une alerte toutes les 5 minutes
-        même si l'agent crash-loop beaucoup plus vite que ça."""
+        """Rate-limit the 'fatal' alerts across process restarts (every crash
+        creates a brand new TestAgent instance, so an in-memory counter is not
+        enough) through a timestamped marker file. By default, at most one alert
+        every 5 minutes even if the agent crash-loops much faster than that."""
         marker = os.path.join(LOG_DIR, ".last_fatal_alert")
         try:
             if os.path.exists(marker) and time.time() - os.path.getmtime(marker) < min_interval:
@@ -586,20 +584,20 @@ class TestAgent:
                 f.write(str(time.time()))
             return True
         except OSError:
-            return True  # en cas de doute, mieux vaut alerter que rester silencieux
+            return True  # when in doubt, better to alert than to stay silent
 
     def stop_signal(self, signum, frame):
-        # Ne fait QUE positionner le flag d'arrêt : le nettoyage complet (fermeture
-        # des loggers, upload final...) se fait une seule fois via le `finally` de
-        # run(), dans le fil d'exécution normal de la boucle principale. Fermer
-        # les fichiers directement ici pourrait interrompre une écriture CSV en
-        # cours (le signal peut arriver à tout moment, y compris en pleine
-        # itération de tracker.update()), provoquant un ValueError sur fichier
-        # déjà fermé -- et une fausse "erreur fatale" à chaque redémarrage normal.
+        # ONLY sets the stop flag: the full cleanup (closing the loggers, final
+        # upload...) happens exactly once through the `finally` of run(), in the
+        # normal execution path of the main loop. Closing the files directly here
+        # could interrupt a CSV write in progress (the signal can arrive at any
+        # moment, including in the middle of tracker.update()), causing a
+        # ValueError on an already closed file -- and a bogus "fatal error" on
+        # every normal restart.
         self.running = False
 
     def stop(self):
-        print("🛑 Arrêt de l'Agent...")
+        print("🛑 Stopping the agent...")
         self.running = False
 
         if self.recorder or self.logger:
@@ -636,19 +634,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--keep-all",
         action="store_true",
-        help="[Mode 'video' uniquement] Conserver et envoyer toutes les vidéos, "
-             "même sans détection."
+        help="['video' mode only] Keep and send every video, "
+             "even without detections."
     )
     parser.add_argument(
         "--upload-mode",
         choices=["video", "snapshot", "video+snapshot", "bench"],
         default="video",
         help=(
-            "Mode d'upload 4G :\n"
-            "  video          : upload vidéo si détections (comportement original)\n"
-            "  snapshot       : JPEG annoté par détection uniquement, pas de vidéo\n"
-            "  video+snapshot : vidéo enregistrée en local + JPEG uploadé sur 4G\n"
-            "  bench          : pour analyse HardwareX (log exhaustif + vidéo annotée locale)"
+            "4G upload mode:\n"
+            "  video          : upload the video if there were detections (original behaviour)\n"
+            "  snapshot       : annotated JPEG per detection only, no video\n"
+            "  video+snapshot : video recorded locally + JPEG uploaded over 4G\n"
+            "  bench          : for HardwareX analysis (exhaustive log + local annotated video)"
         )
     )
 
@@ -656,7 +654,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default=None,
-        help="Surcharge le MODEL_PATH de configs.py (pratique pour tester NCNN/ONNX)"
+        help="Override MODEL_PATH from configs.py (handy to test NCNN/ONNX)"
     )
 
     args = parser.parse_args()
@@ -668,16 +666,16 @@ if __name__ == "__main__":
             model_override=args.model,
         )
     except Exception as e:
-        # Une erreur ici (avant même que la boucle principale n'existe) était
-        # jusqu'ici totalement invisible à distance : write_alert() n'était
-        # appelé que depuis l'intérieur de run(). On écrit au moins le fichier
-        # localement -- il sera repris et uploadé au prochain démarrage réussi
-        # via le rescan de SFTPManager -- et on sort avec un code non-nul pour
-        # que run_agent.sh applique son backoff plutôt que de relancer aussitôt.
-        print(f"🔥 Erreur fatale à l'initialisation : {e}")
+        # An error here (before the main loop even exists) used to be completely
+        # invisible remotely: write_alert() was only called from inside run().
+        # We now at least write the file locally -- it will be picked up and
+        # uploaded at the next successful start through the SFTPManager rescan --
+        # and we exit with a non-zero code so that run_agent.sh applies its
+        # backoff rather than restarting immediately.
+        print(f"🔥 Fatal error during initialisation: {e}")
         import traceback
         traceback.print_exc()
-        write_alert("fatal_init", f"Erreur fatale à l'initialisation de l'agent : {e}")
+        write_alert("fatal_init", f"Fatal error during agent initialisation: {e}")
         sys.exit(1)
 
     agent.run()

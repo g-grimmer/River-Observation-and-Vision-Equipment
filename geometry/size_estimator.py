@@ -4,33 +4,33 @@ from .intersection import get_largest_diameters
 
 
 def estimate_size_m(camera, x1, y1, x2, y2, portee_max_m=None):
-    """Taille physique de l'objet en metres, depuis la boite YOLO.
+    """Physical size of the object in metres, from the YOLO box.
 
-    Renvoie (nan, nan) quand la boite n'est pas exploitable geometriquement.
-    `tracker.py` teste deja ce cas (`geometry_valid`) et exclut les NaN des
-    moyennes : une valeur absurde mais finie, elle, entrait silencieusement
-    dans les statistiques.
+    Returns (nan, nan) whenever the box cannot be exploited geometrically.
+    `tracker.py` already tests for this case (`geometry_valid`) and excludes NaN
+    from the averages: an absurd but finite value would instead enter the
+    statistics silently.
 
-    Deux garde-fous, tous deux portant sur le bord SUPERIEUR de la boite, qui
-    fournit le rayon le plus rasant :
+    Two safeguards, both applied to the TOP edge of the box, which yields the
+    most grazing ray:
 
-    1. Au-dessus de l'horizon, le rayon ne coupe jamais le plan d'eau. Avec la
-       pose declaree (H=2.7 m, tangage -19 deg, demi-champ vertical 20.95 deg),
-       le haut de l'image pointe 1.95 deg au-dessus de l'horizontale : les 5 %
-       superieurs de l'image sont dans ce cas.
+    1. Above the horizon the ray never meets the water plane. With the declared
+       pose (H=2.7 m, tilt -19 deg, vertical half-field 20.95 deg) the top of the
+       image points 1.95 deg above the horizontal: the upper 5 % of the image
+       falls in this case.
 
-    2. Juste sous l'horizon, le rayon est rasant et son intersection part au
-       loin : a y_c = 0.10 la portee vaut 69 m et un seul pixel de boite
-       deplace l'estimation de 5.3 cm, contre 0.33 cm en bas d'image.
-       `portee_max_m` doit valoir la distance de la berge opposee : au-dela,
-       il n'y a plus d'eau, donc plus de debris a mesurer.
+    2. Just below the horizon the ray is grazing and its intersection runs far
+       away: at y_c = 0.10 the range is 69 m and a single pixel of box displaces
+       the estimate by 5.3 cm, against 0.33 cm at the bottom of the image.
+       `portee_max_m` should be set to the distance of the far bank: beyond it
+       there is no water left, hence no debris to measure.
 
-    Retourne: (largeur_m, hauteur_m)
+    Returns: (width_m, height_m)
     """
     _, direction = camera.get_world_ray((x1 + x2) / 2.0, y1)
 
-    # get_world_ray renvoie un vecteur unitaire ; le plan d'eau est y = 0 et la
-    # camera est en y = H (voir intersection.ray_plane_intersection_y0).
+    # get_world_ray returns a unit vector; the water plane is y = 0 and the
+    # camera sits at y = H (see intersection.ray_plane_intersection_y0).
     if direction[1] >= 0:
         return float("nan"), float("nan")
 

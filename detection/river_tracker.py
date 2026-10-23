@@ -1,45 +1,43 @@
-"""Tracker adapte aux debris en riviere : association par distance, pas par IoU.
+"""Tracker adapted to river debris: association by distance, not by IoU.
 
-Pourquoi
---------
-Mesure sur la verite terrain de `holtzheim_03_session_06` : entre deux trames
-consecutives, un debris parcourt 33 px alors que sa boite en fait 24. Les
-boites consecutives d'un meme objet ne se recouvrent donc pas -- IoU median
-0,000, nul dans 75 % des transitions.
+Why
+---
+Measured on the ground truth of `holtzheim_03_session_06`: between two
+consecutive frames a debris item travels 33 px while its box is 24 px wide. The
+consecutive boxes of a single object therefore do not overlap -- median IoU
+0.000, exactly zero in 75 % of the transitions.
 
-Tous les trackers livres par Ultralytics (bytetrack, botsort, ocsort,
-tracktrack) apparient par IoU et **rejettent** un couple dont le cout depasse
-`match_thresh` avant meme de tenter l'affectation. A IoU nul le cout vaut 1,0 :
-le couple est ecarte, la piste meurt, et la detection suivante ouvre une piste
-qui ne s'activera jamais faute de second appariement. Resultat mesure : 1 a 2
-pistes produites pour 18 objets reels.
+Every tracker shipped with Ultralytics (bytetrack, botsort, ocsort, tracktrack)
+associates by IoU and **rejects** a pair whose cost exceeds `match_thresh`
+before even attempting the assignment. At zero IoU the cost is 1.0: the pair is
+discarded, the track dies, and the next detection opens a track that will never
+activate for lack of a second match. Measured result: 1 to 2 tracks produced for
+18 real objects.
 
-Ce n'est pas un manque d'information. Sur la meme verite terrain, l'affectation
-par distance des centres relie correctement 99,6 % des objets le jour et 100 %
-la nuit, contre 73-76 % pour un critere de taille -- l'aire d'une boite varie
-d'un facteur 4,7 le long d'une seule piste, la taille n'est pas une signature.
+This is not a lack of information. On the same ground truth, associating by the
+distance between centres correctly links 99.6 % of the objects by day and 100 %
+at night, against 73-76 % for a size criterion -- the area of a box varies by a
+factor of 4.7 along a single track, so size is not a signature.
 
-Comment
--------
-Seule `get_dists` change ; tout le reste de ByteTrack (filtre de Kalman,
-association en deux passes, cycle de vie des pistes) est conserve.
+How
+---
+Only `get_dists` changes; everything else in ByteTrack (Kalman filter, two-pass
+association, track life cycle) is kept.
 
-Le cout est la distance entre la position **predite par Kalman** et le centre
-de la detection, normalisee par la taille de la detection :
+The cost is the distance between the position **predicted by Kalman** and the
+centre of the detection, normalised by the size of the detection:
 
-    cout = min(1, distance / (max_move_ratio * sqrt(largeur * hauteur)))
+    cost = min(1, distance / (max_move_ratio * sqrt(width * height)))
 
-Normaliser par la taille de l'objet rend le critere independant de la
-resolution et du site : il exprime « un objet peut se deplacer d'au plus N fois
-sa propre taille entre deux trames ». `match_thresh` continue de jouer son role
-de porte, sur une echelle [0, 1] comme avant : 0,8 avec max_move_ratio 4,0
-autorise 3,2 tailles d'objet.
+Normalising by the object size makes the criterion independent of resolution and
+of site: it expresses "an object may travel at most N times its own size between
+two frames". `match_thresh` keeps playing its role as a gate, on a [0, 1] scale
+as before: 0.8 with max_move_ratio 4.0 allows 3.2 object sizes.
 
-Enregistrement
---------------
-Importer ce module suffit : il ajoute le type `river` a la table des trackers
-d'Ultralytics. Aucun detournement de comportement, `TRACKER_MAP` est une simple
-table d'enregistrement.
+Registration
+------------
+Importing this module is enough: it adds the `river` type to Ultralytics' tracker
+table. No behaviour is hijacked, `TRACKER_MAP` is a plain registration table.
 """
 
 import numpy as np
@@ -50,7 +48,7 @@ DEFAULT_MAX_MOVE_RATIO = 4.0
 
 
 class RiverTracker(BYTETracker):
-    """ByteTrack dont l'association se fait par distance normalisee a la taille."""
+    """ByteTrack whose association is done by size-normalised distance."""
 
     def get_dists(self, tracks, detections) -> np.ndarray:
         if not len(tracks) or not len(detections):
@@ -58,17 +56,17 @@ class RiverTracker(BYTETracker):
 
         ratio = float(getattr(self.args, "max_move_ratio", DEFAULT_MAX_MOVE_RATIO))
 
-        t = np.array([tr.xywh for tr in tracks], dtype=np.float32)       # etat predit
+        t = np.array([tr.xywh for tr in tracks], dtype=np.float32)       # predicted state
         d = np.array([dt.xywh for dt in detections], dtype=np.float32)
 
         dist = np.linalg.norm(t[:, None, :2] - d[None, :, :2], axis=2)
 
-        # Taille de reference : moyenne geometrique des cotes de la detection.
-        # On prend celle de la detection et non de la piste, car l'etat predit
-        # d'une piste jeune est encore bruite.
+        # Reference size: geometric mean of the detection sides. The detection
+        # is used rather than the track, because the predicted state of a young
+        # track is still noisy.
         size = np.sqrt(np.clip(d[:, 2] * d[:, 3], 1e-6, None))
         return np.clip(dist / (ratio * size[None, :]), 0.0, 1.0).astype(np.float32)
 
 
-# Enregistrement du type `river` aupres d'Ultralytics.
+# Registration of the `river` type with Ultralytics.
 _ul_track.TRACKER_MAP.setdefault("river", RiverTracker)

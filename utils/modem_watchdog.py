@@ -1,33 +1,33 @@
 """
 modem_watchdog.py
 -----------------
-Watchdog logiciel pour le module 4G Waveshare (SIM7600/SIM7900).
+Software watchdog for the Waveshare 4G module (SIM7600/SIM7900).
 
-Symptôme ciblé : le modem se fige (2 LEDs rouges fixes, pas de trafic),
-sans que le Raspberry Pi lui-même soit planté. Un simple `sudo reboot`
-récupère la situation car il force un power-cycle USB du module.
+Targeted symptom: the modem freezes (2 steady red LEDs, no traffic), without the
+Raspberry Pi itself being stuck. A plain `sudo reboot` recovers the situation
+because it forces a USB power cycle of the module.
 
-Ce module reproduit le comportement de reboot *sans* redémarrer le Pi :
-  1. Ping périodique d'un serveur fiable (8.8.8.8), lié à l'interface 4G identifiée
-     (jamais un ping "en général" qui pourrait passer par l'Ethernet ou le Wi-Fi)
-  2. Si N pings consécutifs échouent → interface réseau down/up
-  3. Si le down/up échoue → reset USB du modem via /sys
-  4. Si tout échoue → AT+CFUN=1,1 via port série (reset firmware)
-  5. En dernier recours : log + fichier d'alerte remonté au NAS (pas de reboot,
-     pour ne pas perdre les vidéos en cours d'enregistrement)
+This module reproduces the effect of that reboot *without* restarting the Pi:
+  1. Periodic ping of a reliable server (8.8.8.8), bound to the identified 4G
+     interface (never a "general" ping, which could travel over Ethernet or Wi-Fi)
+  2. If N consecutive pings fail -> network interface down/up
+  3. If the down/up fails -> USB reset of the modem through /sys
+  4. If everything fails -> AT+CFUN=1,1 over the serial port (firmware reset)
+  5. As a last resort: log + alert file transmitted to the NAS (no reboot, so as
+     not to lose the videos being recorded)
 
-Avant toute action destructrice (down/up, power-cycle USB), attend qu'un upload
-SFTP en cours se termine (voir SFTPManager.upload_in_progress). En cas d'échecs
-totaux répétés, le délai avant nouvelle tentative augmente exponentiellement
-(120s, 240s, ... jusqu'à 1h) plutôt que de marteler le modem indéfiniment toutes
-les 2-4 minutes en cas de panne matérielle réelle.
+Before any destructive action (down/up, USB power cycle), it waits for an SFTP
+upload in progress to finish (see SFTPManager.upload_in_progress). On repeated
+complete failures, the delay before the next attempt grows exponentially
+(120s, 240s, ... up to 1h) rather than hammering the modem indefinitely every
+2-4 minutes in the case of a genuine hardware fault.
 
-Usage :
+Usage:
     from utils.modem_watchdog import ModemWatchdog
     wd = ModemWatchdog()
-    wd.start()   # Thread daemon, s'arrête quand le process Python quitte
+    wd.start()   # Daemon thread, stops when the Python process exits
     ...
-    wd.stop()    # Arrêt propre
+    wd.stop()    # Clean shutdown
 """
 
 import threading
@@ -42,30 +42,30 @@ from utils.alerting import write_alert
 logger = logging.getLogger("ModemWatchdog")
 
 # ---------------------------------------------------------------------------
-# Configuration (modifiable sans toucher au reste du code)
+# Configuration (tunable without touching the rest of the code)
 # ---------------------------------------------------------------------------
 
-PING_HOST        = "8.8.8.8"        # Cible principale du ping de santé
-PING_HOST_FALLBACK = "1.1.1.1"      # Repli si la cible principale ne répond pas
-                                     # (un opérateur peut bloquer/ralentir l'ICMP
-                                     # vers une IP précise sans que la 4G soit KO)
-PING_COUNT       = 2                 # Paquets envoyés par check
-PING_TIMEOUT     = 5                 # Secondes max par ping
-CHECK_INTERVAL   = 30                # Secondes entre deux checks normaux
-MAX_FAILURES     = 3                 # Échecs consécutifs avant action
-RECOVERY_COOLDOWN = 120              # Secondes de repos après une recovery (1er échec total)
-MAX_RECOVERY_COOLDOWN = 3600         # Plafond du backoff exponentiel (1h) après échecs répétés
+PING_HOST        = "8.8.8.8"        # Main health-check ping target
+PING_HOST_FALLBACK = "1.1.1.1"      # Fallback if the main target does not answer
+                                     # (an operator may block or throttle ICMP to
+                                     # one IP without the 4G link being down)
+PING_COUNT       = 2                 # Packets sent per check
+PING_TIMEOUT     = 5                 # Max seconds per ping
+CHECK_INTERVAL   = 30                # Seconds between two normal checks
+MAX_FAILURES     = 3                 # Consecutive failures before acting
+RECOVERY_COOLDOWN = 120              # Rest seconds after a recovery (1st total failure)
+MAX_RECOVERY_COOLDOWN = 3600         # Exponential backoff ceiling (1h) after repeated failures
 
-# Noms d'interfaces réseau possibles pour le modem 4G (essayés en premier, rapide)
+# Possible network interface names for the 4G modem (tried first, cheap)
 MODEM_INTERFACES = ["usb0", "wwan0", "eth1"]
-# Repli si aucun des noms ci-dessus n'existe : drivers USB typiques des modems
-# cellulaires (qmi_wwan/cdc_ether/...). Plus robuste qu'une liste de noms figés,
-# qui peut ne plus matcher après une ré-énumération USB ou selon le mode du modem.
+# Fallback if none of the names above exists: USB drivers typical of cellular
+# modems (qmi_wwan/cdc_ether/...). More robust than a fixed list of names, which
+# may stop matching after a USB re-enumeration or depending on the modem mode.
 MODEM_DRIVER_HINTS = ("qmi_wwan", "cdc_ether", "cdc_ncm", "rndis_host", "cdc_mbim")
 
-# Port série AT du modem (SIM7600 expose plusieurs /dev/ttyUSB*, le 2 est le port AT)
+# AT serial port of the modem (the SIM7600 exposes several /dev/ttyUSB*, 2 is the AT port)
 AT_SERIAL_CANDIDATES = [
-    "/dev/ttyUSB2",  # SIM7600 — port AT standard
+    "/dev/ttyUSB2",  # SIM7600 -- standard AT port
     "/dev/ttyUSB1",
     "/dev/ttyUSB3",
 ]
@@ -75,8 +75,8 @@ AT_SERIAL_CANDIDATES = [
 
 class ModemWatchdog(threading.Thread):
     """
-    Thread daemon qui surveille la connectivité 4G et tente de récupérer
-    le modem sans reboot en cas de freeze.
+    Daemon thread that monitors 4G connectivity and tries to recover the modem
+    without rebooting in case of a freeze.
     """
 
     def __init__(self,
@@ -92,18 +92,18 @@ class ModemWatchdog(threading.Thread):
         self._failure_count = 0
         self._recovery_count = 0
         self._last_recovery_ts = 0.0
-        # Nombre de cycles de recovery COMPLETS (les 4 étapes) ayant totalement
-        # échoué d'affilée -- distinct de _failure_count (échecs de ping). Sert au
-        # backoff exponentiel : remis à 0 dès qu'une étape quelconque réussit.
+        # Number of COMPLETE recovery cycles (all 4 steps) that failed outright
+        # in a row -- distinct from _failure_count (ping failures). Drives the
+        # exponential backoff: reset to 0 as soon as any step succeeds.
         self._consecutive_total_failures = 0
-        # Référence optionnelle vers le manager d'upload : permet de remonter au
-        # NAS un fichier d'alerte quand toutes les tentatives de recovery échouent
-        # (aucune notification externe SMS/email/webhook n'est configurée).
+        # Optional reference to the upload manager: lets an alert file reach the
+        # NAS when every recovery attempt fails (no external SMS/email/webhook
+        # notification is configured).
         self._sftp_manager = sftp_manager
 
         logger.info(
-            f"[Watchdog] Initialisé — ping {self.ping_host} "
-            f"toutes les {self.check_interval}s, seuil={self.max_failures} échecs"
+            f"[Watchdog] Initialised -- pinging {self.ping_host} "
+            f"every {self.check_interval}s, threshold={self.max_failures} failures"
         )
 
     # -----------------------------------------------------------------------
@@ -113,15 +113,15 @@ class ModemWatchdog(threading.Thread):
     def start(self):
         self.running = True
         super().start()
-        logger.info("[Watchdog] Démarré.")
+        logger.info("[Watchdog] Started.")
 
     def stop(self):
         self.running = False
-        logger.info("[Watchdog] Arrêté.")
+        logger.info("[Watchdog] Stopped.")
 
     @property
     def is_connected(self) -> bool:
-        """True si la dernière vérification de ping a réussi."""
+        """True if the last ping check succeeded."""
         return self._failure_count == 0
 
     @property
@@ -133,7 +133,7 @@ class ModemWatchdog(threading.Thread):
     # -----------------------------------------------------------------------
 
     def run(self):
-        # Attendre 10s après le démarrage pour laisser le modem s'initialiser
+        # Wait 10s after start-up to let the modem initialise
         time.sleep(10)
 
         while self.running:
@@ -142,42 +142,42 @@ class ModemWatchdog(threading.Thread):
                 if iface:
                     ok = self._ping_check(iface)
                 else:
-                    # Pas d'interface 4G identifiée : impossible de vérifier le lien
-                    # 4G spécifiquement (un ping non lié pourrait passer via une
-                    # autre interface, Ethernet ou Wi-Fi, et masquer un vrai
-                    # problème). Traité comme un échec de connectivité 4G.
+                    # No 4G interface identified: the 4G link cannot be checked
+                    # specifically (an unbound ping could travel through another
+                    # interface, Ethernet or Wi-Fi, and hide a real problem).
+                    # Treated as a 4G connectivity failure.
                     logger.warning(
-                        "[Watchdog] Aucune interface 4G identifiée — connectivité "
-                        "4G considérée comme indisponible tant qu'elle n'apparaît pas."
+                        "[Watchdog] No 4G interface identified -- 4G connectivity "
+                        "considered unavailable until one appears."
                     )
                     ok = False
 
                 if ok:
                     if self._failure_count > 0:
                         logger.info(
-                            f"[Watchdog] ✅ Connectivité 4G rétablie "
-                            f"(après {self._failure_count} échecs)"
+                            f"[Watchdog] ✅ 4G connectivity restored "
+                            f"(after {self._failure_count} failures)"
                         )
                     self._failure_count = 0
                     time.sleep(self.check_interval)
                 else:
-                    # Plafonné à max_failures : au-delà, le chiffre n'apporte plus
-                    # d'information de décision (le seuil est déjà atteint) et ne
-                    # faisait que produire des logs du type "47/3" pendant tout le
-                    # temps du cooldown, trompeurs sur la gravité réelle.
+                    # Capped at max_failures: beyond that the number carries no
+                    # more decision value (the threshold is already reached) and
+                    # only produced logs such as "47/3" for the whole cooldown,
+                    # misleading as to the real severity.
                     self._failure_count = min(self._failure_count + 1, self.max_failures)
                     logger.warning(
-                        f"[Watchdog] ⚠️ Ping 4G échoué "
+                        f"[Watchdog] ⚠️ 4G ping failed "
                         f"({self._failure_count}/{self.max_failures})"
                     )
 
                     if self._failure_count >= self.max_failures:
-                        # Cooldown anti-boucle, avec backoff exponentiel plafonné
-                        # après des échecs COMPLETS répétés (voir _attempt_recovery) :
-                        # 120s, 240s, 480s... jusqu'à MAX_RECOVERY_COOLDOWN (1h).
-                        # Une panne matérielle réelle ne doit pas déclencher des
-                        # power-cycles USB/firmware toutes les 2-4 minutes pendant
-                        # des jours -- seulement de plus en plus rarement.
+                        # Anti-loop cooldown, with an exponential backoff capped
+                        # after repeated COMPLETE failures (see _attempt_recovery):
+                        # 120s, 240s, 480s... up to MAX_RECOVERY_COOLDOWN (1h).
+                        # A genuine hardware fault must not trigger USB/firmware
+                        # power cycles every 2-4 minutes for days -- only more and
+                        # more rarely.
                         cooldown = min(
                             RECOVERY_COOLDOWN * (2 ** self._consecutive_total_failures),
                             MAX_RECOVERY_COOLDOWN,
@@ -186,19 +186,19 @@ class ModemWatchdog(threading.Thread):
                         if elapsed < cooldown:
                             wait = int(cooldown - elapsed)
                             logger.info(
-                                f"[Watchdog] Cooldown actif ({cooldown}s, "
-                                f"échecs totaux consécutifs: {self._consecutive_total_failures}) "
-                                f"— attente {wait}s avant prochaine tentative"
+                                f"[Watchdog] Cooldown active ({cooldown}s, "
+                                f"consecutive total failures: {self._consecutive_total_failures}) "
+                                f"-- waiting {wait}s before the next attempt"
                             )
                             time.sleep(min(wait, self.check_interval))
                         else:
                             self._attempt_recovery()
                     else:
-                        # Réessaye plus vite tant qu'on n'a pas atteint le seuil
+                        # Retry faster as long as the threshold is not reached
                         time.sleep(max(5, self.check_interval // 3))
 
             except Exception as exc:
-                logger.error(f"[Watchdog] Erreur inattendue : {exc}", exc_info=True)
+                logger.error(f"[Watchdog] Unexpected error: {exc}", exc_info=True)
                 time.sleep(self.check_interval)
 
     # -----------------------------------------------------------------------
@@ -206,11 +206,11 @@ class ModemWatchdog(threading.Thread):
     # -----------------------------------------------------------------------
 
     def _ping_check(self, iface: str | None = None) -> bool:
-        """Retourne True si le ping réussit, sur la cible principale ou, à
-        défaut, sur une cible de repli (un opérateur peut bloquer/ralentir
-        l'ICMP vers une IP précise sans que la connectivité 4G réelle soit
-        affectée — une seule cible risquerait de déclencher une recovery
-        matérielle complète sur un modem parfaitement sain)."""
+        """Return True if the ping succeeds, on the main target or, failing
+        that, on a fallback target (an operator may block or throttle ICMP to one
+        IP without the real 4G connectivity being affected -- a single target
+        would risk triggering a full hardware recovery on a perfectly healthy
+        modem)."""
         if self._ping_once(self.ping_host, iface):
             return True
         if self.ping_host != PING_HOST_FALLBACK:
@@ -218,12 +218,13 @@ class ModemWatchdog(threading.Thread):
         return False
 
     def _ping_once(self, host: str, iface: str | None) -> bool:
-        """Un seul essai de ping vers `host`.
+        """A single ping attempt towards `host`.
 
-        Si `iface` est fourni, le ping est lié à cette interface (-I) pour tester
-        spécifiquement le lien 4G. Sans ça, `ping` emprunte la route par défaut du
-        système — qui peut très bien être l'Ethernet ou le Wi-Fi si ces liens sont
-        actifs, auquel cas un ping réussi ne prouve rien sur l'état réel du modem."""
+        If `iface` is given, the ping is bound to that interface (-I) so that the
+        4G link specifically is tested. Without it, `ping` takes the system
+        default route -- which may well be Ethernet or Wi-Fi if those links are
+        up, in which case a successful ping proves nothing about the real state
+        of the modem."""
         cmd = ["ping", "-c", str(PING_COUNT), "-W", str(PING_TIMEOUT), "-q"]
         if iface:
             cmd += ["-I", iface]
@@ -238,18 +239,18 @@ class ModemWatchdog(threading.Thread):
         except subprocess.TimeoutExpired:
             return False
         except FileNotFoundError:
-            # Le binaire `ping` lui-même est absent (paquet retiré, image
-            # minimale) — distinct d'une vraie coupure réseau. Loggé en ERROR
-            # (visible par défaut, contrairement à debug) pour ne pas déclencher
-            # des resets matériels en boucle sur un modem parfaitement sain à
-            # cause d'un outil manquant, sans que personne ne le remarque.
+            # The `ping` binary itself is missing (package removed, minimal
+            # image) -- distinct from a real network outage. Logged at ERROR
+            # (visible by default, unlike debug) so that repeated hardware resets
+            # are not triggered on a perfectly healthy modem because of a missing
+            # tool, without anyone noticing.
             logger.error(
-                "[Watchdog] Binaire `ping` introuvable — impossible de vérifier "
-                "la connectivité 4G. Installer le paquet iputils-ping."
+                "[Watchdog] `ping` binary not found -- 4G connectivity cannot be "
+                "checked. Install the iputils-ping package."
             )
             return False
         except Exception as exc:
-            logger.debug(f"[Watchdog] ping exception ({host}) : {exc}")
+            logger.debug(f"[Watchdog] ping exception ({host}): {exc}")
             return False
 
     # -----------------------------------------------------------------------
@@ -257,11 +258,11 @@ class ModemWatchdog(threading.Thread):
     # -----------------------------------------------------------------------
 
     def _wait_for_upload_idle(self, max_wait: int = 20):
-        """Attend qu'un upload SFTP en cours se termine avant une action réseau
-        destructrice (interface down/up, power-cycle USB), pour ne pas tronquer un
-        transfert en pleine transmission. Attente bornée : si l'upload traîne
-        au-delà de max_wait, on considère la connexion compromise de toute façon
-        et on procède à la recovery sans attendre indéfiniment."""
+        """Wait for an SFTP upload in progress to finish before a destructive
+        network action (interface down/up, USB power cycle), so as not to truncate
+        a transfer in flight. Bounded wait: if the upload drags on beyond
+        max_wait, the connection is considered compromised anyway and recovery
+        proceeds rather than waiting indefinitely."""
         sftp = self._sftp_manager
         if not sftp or not hasattr(sftp, "upload_in_progress"):
             return
@@ -270,26 +271,26 @@ class ModemWatchdog(threading.Thread):
             time.sleep(1)
             waited += 1
         if waited > 0:
-            logger.info(f"[Watchdog] Upload en cours détecté — attendu {waited}s avant recovery.")
+            logger.info(f"[Watchdog] Upload in progress detected -- waited {waited}s before recovery.")
 
     def _wait_and_check(self, max_wait: int, poll_interval: int = 3) -> bool:
-        """Sonde le ping toutes les poll_interval secondes jusqu'à max_wait secondes
-        de temps RÉEL (time.monotonic(), pas un compteur d'itérations), retourne
-        dès que la connectivité revient.
+        """Probe the ping every poll_interval seconds up to max_wait seconds of
+        REAL time (time.monotonic(), not an iteration counter), returning as soon
+        as connectivity comes back.
 
-        Deux corrections importantes par rapport à une première version :
-        1. Le temps réel est mesuré avec une deadline monotone : un simple
-           compteur `waited += poll_interval` sous-estimait largement le temps
-           réellement écoulé, car _ping_check() peut à elle seule durer jusqu'à
-           ~24s (2 pings séquentiels avec repli) -- un max_wait "documenté" à 20s
-           pouvait donc réellement durer plus de 3 minutes.
-        2. L'interface est redécouverte à CHAQUE itération plutôt que reçue en
-           argument figé : les étapes de recovery (reset USB, reset firmware)
-           sont précisément celles qui peuvent faire apparaître ou renommer
-           l'interface (ex: wwan0 -> wwan1) PENDANT cette fenêtre d'attente --
-           un nom figé aurait fait échouer le ping (-I sur une interface qui
-           n'existe plus) ou, pire, l'aurait fait retomber sur une route par
-           défaut non liée (faux positif via Ethernet/Wi-Fi)."""
+        Two important corrections over a first version:
+        1. Real time is measured with a monotonic deadline: a plain
+           `waited += poll_interval` counter largely underestimated the time
+           actually elapsed, because _ping_check() alone can take up to ~24s
+           (2 sequential pings with fallback) -- a max_wait "documented" at 20s
+           could therefore really last more than 3 minutes.
+        2. The interface is rediscovered on EVERY iteration rather than received
+           as a frozen argument: the recovery steps (USB reset, firmware reset)
+           are precisely the ones that can make the interface appear or be
+           renamed (e.g. wwan0 -> wwan1) DURING that waiting window -- a frozen
+           name would have made the ping fail (-I on an interface that no longer
+           exists) or, worse, fall back to an unbound default route (a false
+           positive through Ethernet/Wi-Fi)."""
         deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             time.sleep(poll_interval)
@@ -300,73 +301,73 @@ class ModemWatchdog(threading.Thread):
 
     def _attempt_recovery(self):
         """
-        Tente de récupérer le modem par ordre croissant d'agressivité.
-        Retourne True si la connexion est rétablie.
+        Try to recover the modem in increasing order of aggressiveness.
+        Returns True if the connection is restored.
         """
         logger.error(
-            f"[Watchdog] 🔴 {self._failure_count} pings consécutifs "
-            f"échoués — début de la procédure de recovery."
+            f"[Watchdog] 🔴 {self._failure_count} consecutive pings "
+            f"failed -- starting the recovery procedure."
         )
         self._last_recovery_ts = time.time()
         self._recovery_count += 1
 
-        # Ne jamais couper l'interface / le modem en pleine transmission SFTP.
+        # Never cut the interface or the modem in the middle of an SFTP transfer.
         self._wait_for_upload_idle()
 
-        # Étape 1 : Redémarrer l'interface réseau
+        # Step 1: restart the network interface
         iface = self._find_modem_interface()
         if iface:
-            logger.info(f"[Watchdog] Étape 1 — Redémarrage interface {iface}...")
+            logger.info(f"[Watchdog] Step 1 -- restarting interface {iface}...")
             if self._restart_network_interface(iface):
-                # ~20s : un modem LTE met typiquement 15-30s à se ré-attacher
-                # après un simple down/up, bien plus que les 5s précédents.
+                # ~20s: an LTE modem typically takes 15-30s to re-attach after a
+                # plain down/up, far more than the previous 5s.
                 if self._wait_and_check(max_wait=20):
-                    logger.info("[Watchdog] ✅ Recovery Étape 1 réussie (interface down/up).")
+                    logger.info("[Watchdog] ✅ Recovery step 1 succeeded (interface down/up).")
                     self._failure_count = 0
                     self._consecutive_total_failures = 0
                     return True
 
-        # Étape 2 : Reset USB du modem via /sys
-        logger.info("[Watchdog] Étape 2 — Reset USB du modem...")
+        # Step 2: USB reset of the modem through /sys
+        logger.info("[Watchdog] Step 2 -- USB reset of the modem...")
         if self._usb_reset():
-            # ~25s : ré-énumération USB + ré-attachement réseau, plus long qu'un
-            # simple down/up d'interface.
+            # ~25s: USB re-enumeration plus network re-attachment, longer than a
+            # plain interface down/up.
             if self._wait_and_check(max_wait=25):
-                logger.info("[Watchdog] ✅ Recovery Étape 2 réussie (USB reset).")
+                logger.info("[Watchdog] ✅ Recovery step 2 succeeded (USB reset).")
                 self._failure_count = 0
                 self._consecutive_total_failures = 0
                 return True
 
-        # Étape 3 : AT+CFUN=1,1 (reset firmware modem)
-        logger.info("[Watchdog] Étape 3 — Envoi AT+CFUN=1,1 (reset firmware)...")
+        # Step 3: AT+CFUN=1,1 (modem firmware reset)
+        logger.info("[Watchdog] Step 3 -- sending AT+CFUN=1,1 (firmware reset)...")
         if self._at_reset():
             if self._wait_and_check(max_wait=20):
-                logger.info("[Watchdog] ✅ Recovery Étape 3 réussie (AT reset).")
+                logger.info("[Watchdog] ✅ Recovery step 3 succeeded (AT reset).")
                 self._failure_count = 0
                 self._consecutive_total_failures = 0
                 return True
 
-        # Étape 4 : NetworkManager — relancer la connexion GSM
-        logger.info("[Watchdog] Étape 4 — Relance connexion NetworkManager...")
+        # Step 4: NetworkManager -- bring the GSM connection back up
+        logger.info("[Watchdog] Step 4 -- restarting the NetworkManager connection...")
         if self._nmcli_reconnect():
             if self._wait_and_check(max_wait=15):
-                logger.info("[Watchdog] ✅ Recovery Étape 4 réussie (nmcli reconnect).")
+                logger.info("[Watchdog] ✅ Recovery step 4 succeeded (nmcli reconnect).")
                 self._failure_count = 0
                 self._consecutive_total_failures = 0
                 return True
 
-        # Toutes les étapes ont échoué
+        # Every step failed
         self._consecutive_total_failures += 1
 
         if self._consecutive_total_failures >= 2:
             logger.critical(
-                f"[Watchdog] 🚨 Seuil critique atteint ({self._consecutive_total_failures} échecs totaux). "
-                f"Le modem a probablement crashé matériellement. REDÉMARRAGE FORCÉ DU SYSTÈME !"
+                f"[Watchdog] 🚨 Critical threshold reached ({self._consecutive_total_failures} total failures). "
+                f"The modem has probably crashed at hardware level. FORCED SYSTEM REBOOT!"
             )
-            write_alert("modem_fatal", "Reboot automatique déclenché par le watchdog suite à la perte totale du modem.")
+            write_alert("modem_fatal", "Automatic reboot triggered by the watchdog after total loss of the modem.")
             time.sleep(5)
             subprocess.run(["sudo", "reboot"])
-            time.sleep(600)  # Bloque le thread pendant que le Pi s'éteint
+            time.sleep(600)  # Block the thread while the Pi shuts down
             return False
 
         next_cooldown = min(
@@ -374,42 +375,42 @@ class ModemWatchdog(threading.Thread):
             MAX_RECOVERY_COOLDOWN,
         )
         logger.critical(
-            f"[Watchdog] ❌ Toutes les tentatives de recovery ont échoué "
-            f"(échec total consécutif #{self._consecutive_total_failures}). "
-            f"Prochaine tentative dans {next_cooldown}s. Le modem est probablement "
-            f"dans un état nécessitant un reboot matériel."
+            f"[Watchdog] ❌ Every recovery attempt failed "
+            f"(consecutive total failure #{self._consecutive_total_failures}). "
+            f"Next attempt in {next_cooldown}s. The modem is probably in a state "
+            f"that requires a hardware reboot."
         )
-        # Alerte fichier (voir utils/alerting.py), uploadée dès que la connexion
-        # revient. Le backoff exponentiel ci-dessus espace déjà naturellement les
-        # cycles (jusqu'à 1h), donc pas besoin de limiter en plus la fréquence
-        # d'alerte : chaque échec total complet en génère une.
+        # Alert file (see utils/alerting.py), uploaded as soon as the connection
+        # returns. The exponential backoff above already spaces the cycles out
+        # naturally (up to 1h), so there is no need to rate-limit the alerts on
+        # top of that: every complete total failure generates one.
         alert_path = write_alert(
             "modem",
-            f"Recovery 4G complète échouée (échec total consécutif "
-            f"#{self._consecutive_total_failures}). Prochaine tentative dans "
-            f"{next_cooldown}s. Reboot matériel probablement nécessaire si ça persiste."
+            f"Complete 4G recovery failed (consecutive total failure "
+            f"#{self._consecutive_total_failures}). Next attempt in "
+            f"{next_cooldown}s. A hardware reboot is probably needed if this persists."
         )
         if alert_path and self._sftp_manager and not self._sftp_manager.upload_file(alert_path):
-            logger.warning(f"[Watchdog] Alerte modem non mise en file (queue pleine) : {alert_path}")
-        # Reset du compteur de ping pour éviter une re-déclenche immédiate — le
-        # cooldown exponentiel (basé sur _consecutive_total_failures) prend le relais.
+            logger.warning(f"[Watchdog] Modem alert not queued (queue full): {alert_path}")
+        # Reset the ping counter to avoid an immediate re-trigger -- the
+        # exponential cooldown (based on _consecutive_total_failures) takes over.
         self._failure_count = 0
         return False
 
     # -----------------------------------------------------------------------
-    # Étapes individuelles
+    # Individual steps
     # -----------------------------------------------------------------------
 
     def _find_modem_interface(self) -> str | None:
-        """Retourne le nom de l'interface réseau active du modem 4G.
+        """Return the name of the active network interface of the 4G modem.
 
-        Essaie d'abord les noms connus (rapide), puis se rabat sur une découverte
-        par driver USB (qmi_wwan/cdc_ether/...) : une liste de noms figés peut ne
-        plus matcher après une ré-énumération USB (ex: wwan0 -> wwan1)."""
+        Tries the known names first (cheap), then falls back to discovery by USB
+        driver (qmi_wwan/cdc_ether/...): a fixed list of names may stop matching
+        after a USB re-enumeration (e.g. wwan0 -> wwan1)."""
         for iface in MODEM_INTERFACES:
             path = f"/sys/class/net/{iface}"
             if os.path.exists(path):
-                logger.debug(f"[Watchdog] Interface modem trouvée (nom connu) : {iface}")
+                logger.debug(f"[Watchdog] Modem interface found (known name): {iface}")
                 return iface
 
         try:
@@ -420,14 +421,14 @@ class ModemWatchdog(threading.Thread):
                     driver = os.path.basename(os.path.realpath(driver_link))
                     if driver in MODEM_DRIVER_HINTS:
                         logger.debug(
-                            f"[Watchdog] Interface modem trouvée (driver {driver}) : {iface}"
+                            f"[Watchdog] Modem interface found (driver {driver}): {iface}"
                         )
                         return iface
         except Exception as exc:
-            logger.debug(f"[Watchdog] Découverte par driver échouée : {exc}")
+            logger.debug(f"[Watchdog] Driver-based discovery failed: {exc}")
 
         logger.warning(
-            f"[Watchdog] Aucune interface 4G trouvée (noms: {MODEM_INTERFACES}, "
+            f"[Watchdog] No 4G interface found (names: {MODEM_INTERFACES}, "
             f"drivers: {MODEM_DRIVER_HINTS})"
         )
         return None
@@ -446,19 +447,19 @@ class ModemWatchdog(threading.Thread):
             )
             return result.returncode == 0
         except Exception as exc:
-            logger.error(f"[Watchdog] Échec restart interface {iface}: {exc}")
+            logger.error(f"[Watchdog] Interface restart failed for {iface}: {exc}")
             return False
 
     def _usb_reset(self) -> bool:
         """
-        Reset USB du modem via /sys/bus/usb/devices/<id>/authorized.
-        Simule un débranchement/rebranchement USB sans toucher au Pi.
-        Nécessite sudo (écriture root-only sur ce nœud sysfs), restreint via
-        sudoers à `tee` sur ce chemin précis — jamais un shell complet.
+        USB reset of the modem through /sys/bus/usb/devices/<id>/authorized.
+        Simulates unplugging and replugging USB without touching the Pi.
+        Requires sudo (root-only write on that sysfs node), restricted through
+        sudoers to `tee` on that exact path -- never a full shell.
         """
         try:
-            # Trouver le device USB du modem (SIM7600 VID=1E0E)
-            # ou chercher par le nom de l'interface
+            # Find the USB device of the modem (SIM7600 VID=1E0E)
+            # or search by the interface name
             usb_auth_paths = glob.glob(
                 "/sys/bus/usb/devices/*/authorized"
             )
@@ -466,33 +467,33 @@ class ModemWatchdog(threading.Thread):
 
             for auth_path in usb_auth_paths:
                 try:
-                    # Lire idVendor pour identifier le SIM7600/SIM7900
+                    # Read idVendor to identify the SIM7600/SIM7900
                     vendor_path = os.path.join(
                         os.path.dirname(auth_path), "idVendor"
                     )
                     if os.path.exists(vendor_path):
                         with open(vendor_path) as f:
                             vendor = f.read().strip().lower()
-                        # SIM7600 VID: 1e0e, Quectel EC21: 2c7c, fallback générique
+                        # SIM7600 VID: 1e0e, Quectel EC21: 2c7c, generic fallback
                         if vendor in ("1e0e", "2c7c", "12d1", "1bc7"):
                             modem_path = auth_path
                             break
                 except OSError:
-                    # Un device USB peut disparaître entre sa découverte et sa
-                    # lecture -- précisément le genre d'instabilité USB que ce
-                    # watchdog est censé traiter. On continue avec le device
-                    # suivant plutôt que d'abandonner toute la recherche.
+                    # A USB device can vanish between discovery and read --
+                    # precisely the kind of USB instability this watchdog is meant
+                    # to handle. We carry on with the next device rather than
+                    # abandoning the whole search.
                     continue
 
             if not modem_path:
-                # Fallback : chercher via l'interface réseau
+                # Fallback: search through the network interface
                 iface = self._find_modem_interface()
                 if iface:
-                    # Remonter dans /sys pour trouver le device USB parent
+                    # Walk up /sys to find the parent USB device
                     net_path = f"/sys/class/net/{iface}/device"
                     if os.path.exists(net_path):
                         real_path = os.path.realpath(net_path)
-                        # Chercher authorized dans les parents
+                        # Look for `authorized` among the parents
                         candidate = real_path
                         for _ in range(5):
                             candidate = os.path.dirname(candidate)
@@ -503,40 +504,40 @@ class ModemWatchdog(threading.Thread):
 
             if not modem_path:
                 logger.warning(
-                    "[Watchdog] USB reset : device USB du modem introuvable dans /sys"
+                    "[Watchdog] USB reset: modem USB device not found in /sys"
                 )
                 return False
 
-            logger.info(f"[Watchdog] USB reset via : {modem_path}")
-            # `sudo tee <path>` plutôt que `sudo bash -c "echo ... > path"` : un seul
-            # binaire fixe en argument sudo (pas de chaîne shell interpolée), ce qui
-            # permet une règle sudoers restreinte à ce chemin précis.
+            logger.info(f"[Watchdog] USB reset through: {modem_path}")
+            # `sudo tee <path>` rather than `sudo bash -c "echo ... > path"`: a
+            # single fixed binary as the sudo argument (no interpolated shell
+            # string), which allows a sudoers rule restricted to that exact path.
             r0 = subprocess.run(
                 ["sudo", "tee", modem_path],
                 input=b"0\n", timeout=5, capture_output=True
             )
             time.sleep(3)
-            # Réactiver
+            # Re-enable
             r1 = subprocess.run(
                 ["sudo", "tee", modem_path],
                 input=b"1\n", timeout=5, capture_output=True
             )
             if r0.returncode != 0 or r1.returncode != 0:
                 logger.error(
-                    f"[Watchdog] USB reset : écriture sudo tee échouée "
+                    f"[Watchdog] USB reset: sudo tee write failed "
                     f"(codes {r0.returncode}/{r1.returncode})"
                 )
                 return False
             return True
 
         except Exception as exc:
-            logger.error(f"[Watchdog] Échec USB reset : {exc}")
+            logger.error(f"[Watchdog] USB reset failed: {exc}")
             return False
 
     def _at_reset(self) -> bool:
         """
-        Envoie AT+CFUN=1,1 au modem via le port série pour forcer
-        un reset firmware. Fonctionnel même si le réseau est coupé.
+        Send AT+CFUN=1,1 to the modem over the serial port to force a firmware
+        reset. Works even when the network is down.
         """
         at_port = None
         for candidate in AT_SERIAL_CANDIDATES:
@@ -546,7 +547,7 @@ class ModemWatchdog(threading.Thread):
 
         if not at_port:
             logger.warning(
-                f"[Watchdog] Aucun port AT trouvé parmi {AT_SERIAL_CANDIDATES}"
+                f"[Watchdog] No AT port found among {AT_SERIAL_CANDIDATES}"
             )
             return False
 
@@ -559,13 +560,13 @@ class ModemWatchdog(threading.Thread):
 
                 if "OK" not in response:
                     logger.warning(
-                        f"[Watchdog] Modem non-réactif sur {at_port} "
-                        f"(réponse: {response.strip()!r})"
+                        f"[Watchdog] Modem unresponsive on {at_port} "
+                        f"(response: {response.strip()!r})"
                     )
                     return False
 
                 logger.info(
-                    f"[Watchdog] Modem répond sur {at_port}, envoi AT+CFUN=1,1"
+                    f"[Watchdog] Modem answers on {at_port}, sending AT+CFUN=1,1"
                 )
                 ser.write(b"AT+CFUN=1,1\r\n")
                 time.sleep(1)
@@ -573,21 +574,21 @@ class ModemWatchdog(threading.Thread):
 
         except ImportError:
             logger.warning(
-                "[Watchdog] pyserial non installé — AT reset indisponible. "
-                "Installer avec : pip install pyserial"
+                "[Watchdog] pyserial not installed -- AT reset unavailable. "
+                "Install it with: pip install pyserial"
             )
             return False
         except Exception as exc:
-            logger.error(f"[Watchdog] Échec AT reset sur {at_port} : {exc}")
+            logger.error(f"[Watchdog] AT reset failed on {at_port}: {exc}")
             return False
 
     def _nmcli_reconnect(self) -> bool:
         """
-        Utilise nmcli pour déconnecter et reconnecter le profil GSM
-        si NetworkManager gère la connexion 4G.
+        Use nmcli to disconnect and reconnect the GSM profile if NetworkManager
+        manages the 4G connection.
         """
         try:
-            # Lister les connexions actives de type gsm
+            # List the active connections of type gsm
             result = subprocess.run(
                 ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "con", "show", "--active"],
                 capture_output=True, text=True, timeout=10
@@ -600,10 +601,10 @@ class ModemWatchdog(threading.Thread):
 
             if not gsm_profiles:
                 logger.warning(
-                    "[Watchdog] nmcli : aucun profil GSM actif trouvé. "
-                    "Tentative de reconnexion générique..."
+                    "[Watchdog] nmcli: no active GSM profile found. "
+                    "Attempting a generic reconnection..."
                 )
-                # Essaie quand même une reconnexion générique sur l'interface
+                # Try a generic reconnection on the interface anyway
                 iface = self._find_modem_interface()
                 if iface:
                     subprocess.run(
@@ -615,10 +616,10 @@ class ModemWatchdog(threading.Thread):
                         ["nmcli", "device", "connect", iface],
                         timeout=15, capture_output=True
                     )
-                return True  # On tente, résultat vérifié par le ping
+                return True  # We try; the result is verified by the ping
 
             for profile in gsm_profiles:
-                logger.info(f"[Watchdog] nmcli : reconnexion du profil '{profile}'")
+                logger.info(f"[Watchdog] nmcli: reconnecting profile '{profile}'")
                 subprocess.run(
                     ["nmcli", "con", "down", profile],
                     timeout=10, capture_output=True
@@ -631,10 +632,10 @@ class ModemWatchdog(threading.Thread):
             return True
 
         except FileNotFoundError:
-            logger.warning("[Watchdog] nmcli non disponible.")
+            logger.warning("[Watchdog] nmcli not available.")
             return False
         except Exception as exc:
-            logger.error(f"[Watchdog] Échec nmcli reconnect : {exc}")
+            logger.error(f"[Watchdog] nmcli reconnect failed: {exc}")
             return False
 
     # -----------------------------------------------------------------------
@@ -642,8 +643,8 @@ class ModemWatchdog(threading.Thread):
     # -----------------------------------------------------------------------
 
     def status_str(self) -> str:
-        """Retourne un résumé de l'état du watchdog (pour les logs perf)."""
-        connected = "✅" if self._failure_count == 0 else f"⚠️ {self._failure_count} échec(s)"
+        """Return a summary of the watchdog state (for the performance logs)."""
+        connected = "✅" if self._failure_count == 0 else f"⚠️ {self._failure_count} failure(s)"
         return (
             f"Modem: {connected} | "
             f"Recoveries: {self._recovery_count}"

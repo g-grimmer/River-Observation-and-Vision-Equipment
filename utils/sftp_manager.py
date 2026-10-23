@@ -33,37 +33,37 @@ class SFTPManager:
                 "renseigner utils/configs.py."
             )
 
-        self.upload_queue = queue.Queue(maxsize=50)  # Borne pour éviter accumulation infinie
+        self.upload_queue = queue.Queue(maxsize=50)  # Bounded, to avoid unbounded accumulation
         self.running = True
         self._retry_after = {}  # local_path -> earliest retry timestamp
-        self._fail_count = {}   # local_path -> nombre d'échecs consécutifs
-        self.MAX_UPLOAD_ATTEMPTS = 20  # Au-delà, déplacé vers failed/ plutôt que retenté à vie
+        self._fail_count = {}   # local_path -> number of consecutive failures
+        self.MAX_UPLOAD_ATTEMPTS = 20  # Beyond that, moved to failed/ rather than retried forever
         self.thread: Optional[threading.Thread] = None
-        # Consulté par ModemWatchdog avant toute action réseau destructrice
-        # (interface down/up, power-cycle USB) pour ne jamais couper un transfert
-        # en cours de route.
+        # Read by ModemWatchdog before any destructive network action
+        # (interface down/up, USB power cycle) so that a transfer in flight is
+        # never cut off.
         self.upload_in_progress = threading.Event()
 
-        # Détection de la méthode d'upload disponible
-        # Priorité : rsync (reprend les transferts interrompus) > paramiko SFTP (fallback)
-        # rsync nécessite sshpass pour l'authentification par mot de passe.
+        # Detect the available upload method.
+        # Priority: rsync (resumes interrupted transfers) > paramiko SFTP (fallback).
+        # rsync needs sshpass for password authentication.
         self._has_rsync = shutil.which("rsync") is not None
         self._has_sshpass = shutil.which("sshpass") is not None
 
         if self._has_rsync and self._has_sshpass:
-            # Vérifier que rsync est aussi disponible côté NAS distant.
-            # Cause la plus fréquente d'erreur code 12 : rsync absent sur le serveur.
+            # Check that rsync is also available on the remote NAS.
+            # Most frequent cause of error code 12: rsync missing on the server.
             if self._check_remote_rsync():
-                print(f"📡 [Upload] Mode rsync activé (reprise sur coupure, bwlimit 500 Ko/s)")
+                print(f"📡 [Upload] rsync mode enabled (resume on interruption, bwlimit 500 kB/s)")
             else:
-                print(f"⚠️ [Upload] rsync absent sur le NAS distant → fallback paramiko SFTP")
-                print(f"   → Installer rsync sur le NAS pour activer les reprises de transfert.")
-                self._has_rsync = False  # Force paramiko définitivement
+                print(f"⚠️ [Upload] rsync missing on the remote NAS -> paramiko SFTP fallback")
+                print(f"   -> Install rsync on the NAS to enable resumable transfers.")
+                self._has_rsync = False  # Force paramiko for good
         elif self._has_rsync and not self._has_sshpass:
-            print(f"⚠️ [Upload] rsync présent mais sshpass absent → fallback paramiko SFTP")
-            print(f"   → Pour activer rsync : sudo apt-get install -y sshpass")
+            print(f"⚠️ [Upload] rsync present but sshpass missing -> paramiko SFTP fallback")
+            print(f"   -> To enable rsync: sudo apt-get install -y sshpass")
         else:
-            print(f"⚠️ [Upload] rsync absent → mode paramiko SFTP")
+            print(f"⚠️ [Upload] rsync missing -> paramiko SFTP mode")
 
         self._start_upload_thread()
         self._rescan_orphaned_logs()
@@ -72,7 +72,7 @@ class SFTPManager:
             target=self._watchdog_loop, daemon=True, name="sftp-watchdog"
         )
         self.watchdog.start()
-        print(f"📡 [Upload] Manager démarré (Cible: {self.host}:{self.port})")
+        print(f"📡 [Upload] Manager started (target: {self.host}:{self.port})")
 
     # -----------------------------------------------------------------------
     # Public API
@@ -81,8 +81,8 @@ class SFTPManager:
     # -----------------------------------------------------------------------
 
     def _check_remote_rsync(self):
-        """Vérifie si rsync est disponible sur le serveur NAS distant.
-        Évite les erreurs code 12 en boucle quand rsync n'est pas installé côté NAS.
+        """Check whether rsync is available on the remote NAS server.
+        Avoids repeated error-12 failures when rsync is not installed on the NAS.
         """
         try:
             cmd = [
@@ -100,7 +100,7 @@ class SFTPManager:
             result = subprocess.run(cmd, timeout=15, capture_output=True, text=True)
             return result.returncode == 0
         except Exception as e:
-            print(f"⚠️ [Upload] Impossible de vérifier rsync distant : {e}")
+            print(f"⚠️ [Upload] Could not check for remote rsync: {e}")
             return False
 
     # -----------------------------------------------------------------------
@@ -108,18 +108,18 @@ class SFTPManager:
     # -----------------------------------------------------------------------
 
     def upload_file(self, local_path):
-        """Ajoute un fichier à la queue d'upload."""
+        """Add a file to the upload queue."""
         if not os.path.exists(local_path):
-            print(f"⚠️ [Upload] Fichier introuvable : {local_path}")
+            print(f"⚠️ [Upload] File not found: {local_path}")
             return False
         try:
             self.upload_queue.put_nowait(local_path)
-            print(f"📥 [Upload] En queue : {os.path.basename(local_path)}")
+            print(f"📥 [Upload] Queued: {os.path.basename(local_path)}")
             return True
         except queue.Full:
             print(
-                f"⚠️ [Upload] Queue pleine ({self.upload_queue.maxsize} fichiers), "
-                f"{os.path.basename(local_path)} ignoré pour l'instant."
+                f"⚠️ [Upload] Queue full ({self.upload_queue.maxsize} files), "
+                f"{os.path.basename(local_path)} skipped for now."
             )
             return False
 
@@ -132,14 +132,14 @@ class SFTPManager:
             target=self._upload_loop, daemon=True, name="sftp-upload"
         )
         self.thread.start()
-        print(f"🧵 [Upload] Thread démarré.")
+        print(f"🧵 [Upload] Thread started.")
 
     def _watchdog_loop(self):
-        """Redémarre le thread d'upload s'il meurt inopinément."""
+        """Restart the upload thread if it dies unexpectedly."""
         while self.running:
             time.sleep(5)
             if self.running and not self.thread.is_alive():
-                print(f"⚠️ [Upload] Thread mort ! Redémarrage...")
+                print(f"⚠️ [Upload] Thread died! Restarting...")
                 self._start_upload_thread()
 
     def _upload_loop(self):
@@ -150,8 +150,8 @@ class SFTPManager:
                 continue
 
             try:
-                # Retry non-bloquant : si ce fichier a échoué récemment, on le remet
-                # en queue et on passe au suivant plutôt que de bloquer le thread.
+                # Non-blocking retry: if this file failed recently, it is put back
+                # in the queue and we move on rather than blocking the thread.
                 retry_at = self._retry_after.get(local_path, 0)
                 if time.time() < retry_at:
                     self._requeue(local_path)
@@ -165,62 +165,61 @@ class SFTPManager:
                     self.upload_in_progress.clear()
 
                 if success is None:
-                    # Fichier disparu avant l'upload (voir _try_rsync_upload/
-                    # _try_paramiko_upload) : rien à retenter, on arrête le suivi
-                    # sans jamais prétendre que c'était un succès.
+                    # File vanished before the upload (see _try_rsync_upload /
+                    # _try_paramiko_upload): nothing to retry, we stop tracking it
+                    # without ever pretending it was a success.
                     self._retry_after.pop(local_path, None)
                     self._fail_count.pop(local_path, None)
                 elif success:
-                    print(f"✅ [Upload] Réussi : {os.path.basename(local_path)}")
+                    print(f"✅ [Upload] Succeeded: {os.path.basename(local_path)}")
                     self._retry_after.pop(local_path, None)
                     self._fail_count.pop(local_path, None)
                     try:
                         os.remove(local_path)
-                        print(f"🗑️ [Upload] Fichier local supprimé : {os.path.basename(local_path)}")
+                        print(f"🗑️ [Upload] Local file deleted: {os.path.basename(local_path)}")
                     except Exception as e:
-                        print(f"⚠️ [Upload] Impossible de supprimer le fichier local : {e}")
+                        print(f"⚠️ [Upload] Could not delete the local file: {e}")
                 else:
                     attempts = self._fail_count.get(local_path, 0) + 1
                     self._fail_count[local_path] = attempts
                     if attempts >= self.MAX_UPLOAD_ATTEMPTS:
-                        # Trop d'échecs pour ce fichier précis : le retenter pour
-                        # toujours occuperait une des 50 places de la queue bornée
-                        # sans jamais aboutir (ex: NAS plein, nom de fichier
-                        # incompatible). On le sort du cycle actif plutôt que de
-                        # bloquer la capacité utile pendant une panne prolongée.
+                        # Too many failures for this particular file: retrying it
+                        # forever would occupy one of the 50 slots of the bounded
+                        # queue without ever succeeding (e.g. NAS full, incompatible
+                        # file name). We take it out of the active cycle rather than
+                        # blocking useful capacity during a prolonged outage.
                         self._move_to_failed(local_path)
                         self._retry_after.pop(local_path, None)
                         self._fail_count.pop(local_path, None)
                     else:
                         print(
-                            f"❌ [Upload] Échec ({attempts}/{self.MAX_UPLOAD_ATTEMPTS}) : "
-                            f"{os.path.basename(local_path)}. Retry dans 60s..."
+                            f"❌ [Upload] Failed ({attempts}/{self.MAX_UPLOAD_ATTEMPTS}): "
+                            f"{os.path.basename(local_path)}. Retry in 60s..."
                         )
-                        # Backoff 60s (au lieu de 30s) pour laisser le modem respirer
+                        # 60s backoff (instead of 30s) to let the modem breathe
                         self._retry_after[local_path] = time.time() + 60
                         self._requeue(local_path)
 
             except Exception as e:
-                print(f"🔥 [Upload] Erreur inattendue dans la boucle : {e}")
-                self._requeue(local_path)  # Ne pas perdre le fichier si possible
+                print(f"🔥 [Upload] Unexpected error in the loop: {e}")
+                self._requeue(local_path)  # Do not lose the file if we can help it
             finally:
                 self.upload_queue.task_done()
 
     def _rescan_orphaned_logs(self):
-        """Recharge dans la queue les CSV et fichiers d'alerte de logs/ non
-        confirmés uploadés après un redémarrage du process (la queue précédente,
-        purement en mémoire, est perdue à chaque redémarrage). Limité à LOG_DIR
-        -- jamais VIDEO_DIR : les vidéos peuvent être volontairement conservées
-        en local selon le mode d'upload (video+snapshot), on ne devine pas leur
-        statut ici. Marge de sécurité (2x ROTATION_MINUTES) pour ne jamais
-        tenter de réuploader un fichier encore activement écrit par la session
-        en cours.
+        """Put back in the queue the CSV and alert files of logs/ that were not
+        confirmed as uploaded before a process restart (the previous queue, held
+        purely in memory, is lost on every restart). Limited to LOG_DIR -- never
+        VIDEO_DIR: videos may be deliberately kept locally depending on the
+        upload mode (video+snapshot), and their status is not guessed here. A
+        safety margin (2x ROTATION_MINUTES) makes sure a file still being written
+        by the current session is never re-uploaded.
 
-        Les fichiers ALERTE_*.txt (utils/alerting.py) sont inclus depuis peu :
-        avant, seul *.csv était repris, donc une alerte caméra/modem écrite
-        juste avant un redémarrage restait bloquée sur la Pi pour toujours --
-        le seul canal de visibilité à distance de tout ce système pouvait donc
-        rester muet précisément quand une vraie panne se produisait."""
+        ALERTE_*.txt files (utils/alerting.py) have recently been included:
+        before, only *.csv was recovered, so a camera or modem alert written just
+        before a restart stayed stuck on the Pi forever -- the only remote
+        visibility channel of this whole system could therefore stay silent
+        precisely when a real fault occurred."""
         try:
             safety_margin_s = ROTATION_MINUTES * 60 * 2
             now = time.time()
@@ -235,43 +234,43 @@ class SFTPManager:
                     except OSError:
                         continue
             if recovered:
-                print(f"♻️ [Upload] {recovered} log(s) orphelin(s) repris après redémarrage.")
+                print(f"♻️ [Upload] {recovered} orphaned log(s) picked up after restart.")
         except Exception as e:
-            print(f"⚠️ [Upload] Rescan des logs orphelins échoué : {e}")
+            print(f"⚠️ [Upload] Rescan of orphaned logs failed: {e}")
 
     def _move_to_failed(self, local_path):
-        """Sort un fichier du cycle de retry actif après trop d'échecs (voir
-        MAX_UPLOAD_ATTEMPTS) : déplacé localement (jamais supprimé, récupérable
-        manuellement) plutôt que retenté à vie en occupant une place de la queue."""
+        """Take a file out of the active retry cycle after too many failures (see
+        MAX_UPLOAD_ATTEMPTS): moved locally (never deleted, recoverable by hand)
+        rather than retried forever while occupying a queue slot."""
         try:
             failed_dir = os.path.join(os.path.dirname(local_path), "failed")
             os.makedirs(failed_dir, exist_ok=True)
             dest = os.path.join(failed_dir, os.path.basename(local_path))
             os.rename(local_path, dest)
             print(
-                f"🪦 [Upload] {os.path.basename(local_path)} déplacé vers "
-                f"{failed_dir}/ après {self.MAX_UPLOAD_ATTEMPTS} échecs — "
-                f"ne sera plus retenté automatiquement."
+                f"🪦 [Upload] {os.path.basename(local_path)} moved to "
+                f"{failed_dir}/ after {self.MAX_UPLOAD_ATTEMPTS} failures -- "
+                f"it will no longer be retried automatically."
             )
         except Exception as e:
-            print(f"⚠️ [Upload] Impossible de déplacer {local_path} vers failed/ : {e}")
+            print(f"⚠️ [Upload] Could not move {local_path} to failed/: {e}")
 
     def _requeue(self, local_path):
-        """Remet un fichier en queue sans jamais bloquer ce thread.
+        """Put a file back in the queue without ever blocking this thread.
 
-        Un put() bloquant ici peut deadlocker : si le producteur (upload_file,
-        appelé depuis le thread principal) remplit la queue borné juste après le
-        get() de ce thread et avant ce requeue, plus personne ne peut jamais faire
-        le get() qui libérerait une place. put_nowait() élimine ce risque — au prix
-        d'abandonner le fichier (toujours présent sur disque local, mais plus
-        retenté automatiquement) si la queue est déjà pleine."""
+        A blocking put() here can deadlock: if the producer (upload_file, called
+        from the main thread) fills the bounded queue right after this thread's
+        get() and before this requeue, nobody can ever perform the get() that
+        would free a slot. put_nowait() removes that risk -- at the cost of
+        abandoning the file (still present on local disk, but no longer retried
+        automatically) if the queue is already full."""
         try:
             self.upload_queue.put_nowait(local_path)
         except queue.Full:
             print(
                 f"🚨 [Upload] Queue pleine ({self.upload_queue.maxsize}) — "
-                f"{os.path.basename(local_path)} abandonné (pas de retry automatique, "
-                f"le fichier reste sur le disque local)."
+                f"{os.path.basename(local_path)} abandoned (no automatic retry, "
+                f"the file stays on the local disk)."
             )
             self._retry_after.pop(local_path, None)
 
@@ -280,65 +279,65 @@ class SFTPManager:
     # -----------------------------------------------------------------------
 
     def _try_upload(self, local_path):
-        """Dispatch vers rsync ou paramiko selon disponibilité."""
+        """Dispatch to rsync or paramiko depending on availability."""
         if self._has_rsync and self._has_sshpass:
             return self._try_rsync_upload(local_path)
         else:
             return self._try_paramiko_upload(local_path)
 
     # -----------------------------------------------------------------------
-    # Méthode 1 : rsync (prioritaire)
+    # Method 1: rsync (preferred)
     # -----------------------------------------------------------------------
 
     def _try_rsync_upload(self, local_path):
         """
         Upload via rsync + sshpass.
 
-        Avantages vs SFTP paramiko :
-        - --partial        : conserve le fichier partiellement transféré côté NAS
-                             si la connexion est coupée en plein milieu.
-        - --append-verify  : reprend le transfert exactement là où il s'était
-                             arrêté, puis vérifie la checksum de l'ensemble.
-                             → Plus jamais de retransmission depuis le début.
-        - --bwlimit=500    : limite à 500 Ko/s pour ne pas saturer le buffer
-                             du firmware du modem 4G (évite les freezes).
-        - Idempotent       : si le fichier est déjà présent et identique sur
-                             le NAS, rsync ne transfère rien (vérification locale).
+        Advantages over paramiko SFTP:
+        - --partial        : keeps the partially transferred file on the NAS side
+                             if the connection is cut in the middle.
+        - --append-verify  : resumes the transfer exactly where it stopped, then
+                             verifies the checksum of the whole file.
+                             -> No more retransmission from the start.
+        - --bwlimit=500    : caps at 500 kB/s so as not to saturate the buffer of
+                             the 4G modem firmware (avoids freezes).
+        - Idempotent       : if the file is already present and identical on the
+                             NAS, rsync transfers nothing (local check).
         """
         if not os.path.exists(local_path):
             print(
                 f"🚨 [rsync] Fichier disparu avant l'upload : "
-                f"{os.path.basename(local_path)} — abandon, sans vérifier s'il a "
-                f"réellement atteint le NAS (ex: supprimé par le nettoyeur de "
-                f"disque pendant qu'il attendait en queue)."
+                f"{os.path.basename(local_path)} -- giving up, without checking "
+                f"whether it actually reached the NAS (e.g. deleted by the disk "
+                f"cleaner while it was waiting in the queue)."
             )
-            return None  # Ni succès ni échec : rien à retenter, il n'existe plus
+            return None  # Neither success nor failure: nothing to retry, it is gone
 
         remote_dest = f"{self.username}@{self.host}:{self.remote_dir}/"
 
-        # Options SSH : pas de vérification du host (déploiement embarqué),
-        # timeout de connexion rapide pour ne pas bloquer en cas de NAS injoignable.
+        # SSH options: no host verification (embedded deployment), short connect
+        # timeout so we do not hang when the NAS is unreachable.
         ssh_cmd = (
             f"ssh -p {self.port} "
             f"-o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/dev/null "
             f"-o ConnectTimeout=10 "
-            f"-o ServerAliveInterval=15 "   # équivalent du keepalive SSH
-            f"-o ServerAliveCountMax=2 "    # 2 paquets manqués = connexion coupée
-            f"-o BatchMode=yes "            # évite les prompts interactifs et certains banners NAS
+            f"-o ServerAliveInterval=15 "   # SSH keepalive equivalent
+            f"-o ServerAliveCountMax=2 "    # 2 missed packets = connection dropped
+            f"-o BatchMode=yes "            # avoids interactive prompts and some NAS banners
             f"-o LogLevel=ERROR"            # supprime les messages info SSH qui corrompent le protocole rsync
         )
 
         cmd = [
             "sshpass", f"-p{self.password}",
             "rsync",
-            "--archive",        # préserve métadonnées (timestamps, permissions)
+            "--archive",        # preserves metadata (timestamps, permissions)
             "--compress",       # compression en transit (utile pour CSV, neutre pour JPEG)
             "--partial",        # garde le fichier partiel si coupure
-            "--append-verify",  # reprend + vérifie checksum
-            "--timeout=30",     # timeout réseau rsync (secondes sans activité)
-            "--bwlimit=500",    # 500 Ko/s max → protège le buffer du modem
-            "--quiet",          # mode silencieux → évite que les messages du NAS corrompent le protocole
+            "--append-verify",  # resumes + verifies the checksum
+            "--timeout=30",     # rsync network timeout (seconds without activity)
+            "--bwlimit=500",    # 500 kB/s max -> protects the modem buffer
+            "--quiet",          # quiet mode -> keeps NAS messages from corrupting the protocol
             "-e", ssh_cmd,
             local_path,
             remote_dest,
@@ -364,19 +363,19 @@ class SFTPManager:
             # Codes d'erreur rsync utiles pour le diagnostic
             rsync_error_codes = {
                 1:  "Erreur de syntaxe / usage",
-                2:  "Incompatibilité de protocole",
-                5:  "Erreur démarrage client/serveur",
+                2:  "Protocol incompatibility",
+                5:  "Client/server start-up error",
                 10: "Erreur I/O socket",
-                11: "Erreur accès fichier",
-                12: "Erreur protocole de flux de données",
+                11: "File access error",
+                12: "Data stream protocol error",
                 14: "Erreur IPC (code, message ou flux)",
-                20: "Interruption reçue",
+                20: "Interrupt received",
                 21: "Erreur wait() du processus fils",
-                22: "Erreur d'allocation mémoire",
+                22: "Memory allocation error",
                 23: "Transfert partiel (certains fichiers manquants/inaccessibles)",
                 24: "Fichiers source disparus en cours de transfert",
                 25: "Limite --max-delete atteinte",
-                30: "Timeout réseau",
+                30: "Network timeout",
                 35: "Timeout de connexion",
             }
             err_label = rsync_error_codes.get(result.returncode, f"Code {result.returncode}")
@@ -392,38 +391,38 @@ class SFTPManager:
 
         except subprocess.TimeoutExpired:
             print(
-                f"⏱️ [rsync] Hard timeout (180s) dépassé pour "
+                f"⏱️ [rsync] Hard timeout (180s) exceeded for "
                 f"{os.path.basename(local_path)}"
             )
             return False
         except FileNotFoundError:
-            # sshpass ou rsync disparu du système
+            # sshpass or rsync vanished from the system
             print(f"❌ [rsync] sshpass/rsync introuvable. Bascule sur paramiko SFTP.")
-            self._has_sshpass = False  # Désactive rsync pour les prochains essais
+            self._has_sshpass = False  # Disable rsync for subsequent attempts
             return self._try_paramiko_upload(local_path)
 
     # -----------------------------------------------------------------------
-    # Méthode 2 : paramiko SFTP (fallback)
+    # Method 2: paramiko SFTP (fallback)
     # -----------------------------------------------------------------------
 
     def _try_paramiko_upload(self, local_path):
         """
         Fallback SFTP via paramiko si rsync/sshpass sont indisponibles.
         Inclut la fermeture propre de la socket TCP (kernel-level)
-        pour éviter les connexions zombies dans le firmware du modem.
+        to avoid zombie connections inside the modem firmware.
         """
         import paramiko
         import socket
 
         transport = None
-        sock = None  # Référence explicite pour fermeture propre dans le finally
+        sock = None  # Explicit reference, for a clean close in the finally block
         try:
             if not os.path.exists(local_path):
                 print(
                     f"🚨 [SFTP] Fichier disparu avant l'upload : "
-                    f"{os.path.basename(local_path)} — abandon, sans vérifier s'il a "
-                    f"réellement atteint le NAS (ex: supprimé par le nettoyeur de "
-                    f"disque pendant qu'il attendait en queue)."
+                    f"{os.path.basename(local_path)} -- giving up, without checking "
+                    f"whether it actually reached the NAS (e.g. deleted by the disk "
+                    f"cleaner while it was waiting in the queue)."
                 )
                 return None
 
@@ -439,7 +438,7 @@ class SFTPManager:
             try:
                 sftp.stat(self.remote_dir)
             except FileNotFoundError:
-                print(f"📂 [SFTP] Création du répertoire distant : {self.remote_dir}")
+                print(f"📂 [SFTP] Creating the remote directory: {self.remote_dir}")
                 sftp.mkdir(self.remote_dir)
 
             remote_path = os.path.join(self.remote_dir, os.path.basename(local_path))
@@ -448,8 +447,8 @@ class SFTPManager:
 
             upload_exc: list[Optional[Exception]] = [None]
 
-            # Rate-limit paramiko à ~500 Ko/s pour protéger le buffer du modem
-            # (même bwlimit que rsync pour éviter les freezes)
+            # Rate-limit paramiko to ~500 kB/s to protect the modem buffer
+            # (same bwlimit as rsync, to avoid freezes)
             BWLIMIT_BYTES_PER_SEC = 500 * 1024  # 500 Ko/s
             file_size = os.path.getsize(local_path)
 
@@ -476,23 +475,23 @@ class SFTPManager:
 
             put_thread = threading.Thread(target=_do_put, daemon=True)
             put_thread.start()
-            # Timeout proportionnel à la taille du fichier et au débit imposé, avec
-            # 50% de marge et un plancher de 30s. Un timeout fixe de 30s ne peut
-            # mathématiquement jamais suffire au-delà de ~14,6 Mo à 500 Ko/s : tout
-            # fichier plus gros échouerait alors à coup sûr, à chaque tentative.
+            # Timeout proportional to the file size and to the imposed rate, with
+            # 50 % margin and a 30s floor. A fixed 30s timeout can mathematically
+            # never be enough beyond ~14.6 MB at 500 kB/s: any larger file would
+            # then fail for certain, on every attempt.
             put_timeout = max(30, int(file_size / BWLIMIT_BYTES_PER_SEC * 1.5) + 10)
             put_thread.join(timeout=put_timeout)
 
             if put_thread.is_alive():
-                # Forcer la fermeture de la socket pour que _do_put lève une exception
-                # et s'arrête — sans ça le thread daemon reste bloqué et la connexion
-                # TCP reste ouverte côté modem (connexion zombie).
+                # Force the socket closed so that _do_put raises an exception and
+                # stops -- without this the daemon thread stays blocked and the TCP
+                # connection stays open on the modem side (zombie connection).
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
                 except Exception:
                     pass
                 raise TimeoutError(
-                    f"sftp.put() timeout après {put_timeout}s pour {os.path.basename(local_path)}"
+                    f"sftp.put() timed out after {put_timeout}s for {os.path.basename(local_path)}"
                 )
             if upload_exc[0] is not None:
                 raise upload_exc[0]
@@ -502,23 +501,22 @@ class SFTPManager:
             return True
 
         except TimeoutError as e:
-            # Doit être testé AVANT (socket.gaierror, ..., OSError) : depuis
-            # Python 3.10, socket.timeout est un alias de TimeoutError et
-            # TimeoutError est une sous-classe d'OSError -- placé après, ce bloc
-            # n'était jamais atteint (masqué par "NAS injoignable" ci-dessous,
-            # message trompeur pour un simple timeout, ex: celui du point de
-            # sftp.put() bloqué).
+            # Must be tested BEFORE (socket.gaierror, ..., OSError): since
+            # Python 3.10, socket.timeout is an alias of TimeoutError and
+            # TimeoutError is a subclass of OSError -- placed after, this block
+            # was never reached (masked by "NAS unreachable" below, a misleading
+            # message for a plain timeout, e.g. that of a stuck sftp.put()).
             print(f"⏱️ [SFTP] Timeout — {e}")
         except (socket.gaierror, ConnectionRefusedError, OSError) as e:
-            print(f"🔌 [SFTP] NAS injoignable ({self.host}:{self.port}) — {e}")
+            print(f"🔌 [SFTP] NAS unreachable ({self.host}:{self.port}) -- {e}")
         except paramiko.AuthenticationException as e:
-            print(f"🔑 [SFTP] Échec authentification ({self.username}@{self.host}) — {e}")
+            print(f"🔑 [SFTP] Authentication failed ({self.username}@{self.host}) -- {e}")
         except Exception as e:
-            print(f"⚠️ [SFTP] Erreur upload : {e}")
+            print(f"⚠️ [SFTP] Upload error: {e}")
         finally:
-            # Fermeture en cascade : transport → socket brute (kernel)
-            # sock.shutdown() + sock.close() garantit que la connexion TCP est
-            # terminée au niveau kernel même si le transport n'a pas pu s'en charger.
+            # Cascading close: transport -> raw socket (kernel).
+            # sock.shutdown() + sock.close() guarantees the TCP connection is
+            # terminated at kernel level even if the transport could not do it.
             if transport:
                 try:
                     transport.close()
@@ -538,16 +536,16 @@ class SFTPManager:
     # -----------------------------------------------------------------------
 
     def stop(self, drain_timeout: float = 30.0):
-        """Arrête le manager.
+        """Stop the manager.
 
-        Avant, cette méthode se contentait de couper un flag : le thread
-        d'upload est daemon=True, donc tué instantanément à la sortie du
-        process, qu'il ait fini ou non. Sur CHAQUE arrêt (SIGTERM, redémarrage
-        planifié, sys.exit(1) après erreur fatale), les fichiers enfilés juste
-        avant -- notamment les CSV de la dernière session, et pire, une alerte
-        caméra/modem critique -- pouvaient être silencieusement abandonnés en
-        mémoire. On attend maintenant, borné à drain_timeout, que la file soit
-        vide ET qu'aucun transfert ne soit en cours avant de rendre la main.
+        Before, this method only cleared a flag: the upload thread is
+        daemon=True, hence killed instantly when the process exits, whether it
+        had finished or not. On EVERY shutdown (SIGTERM, planned restart,
+        sys.exit(1) after a fatal error), the files queued just before -- notably
+        the CSV files of the last session, and worse, a critical camera or modem
+        alert -- could be silently abandoned in memory. We now wait, bounded by
+        drain_timeout, for the queue to be empty AND for no transfer to be in
+        progress before returning.
         """
         deadline = time.monotonic() + drain_timeout
         while time.monotonic() < deadline:
@@ -558,8 +556,8 @@ class SFTPManager:
             remaining = self.upload_queue.qsize()
             if remaining or self.upload_in_progress.is_set():
                 print(
-                    f"⚠️ [Upload] Arrêt après {drain_timeout:.0f}s d'attente : "
-                    f"{remaining} fichier(s) encore en file, abandonnés (non uploadés)."
+                    f"⚠️ [Upload] Stopping after {drain_timeout:.0f}s of waiting: "
+                    f"{remaining} file(s) still queued, abandoned (not uploaded)."
                 )
         self.running = False
-        print("🛑 [Upload] Arrêt du manager...")
+        print("🛑 [Upload] Stopping the manager...")

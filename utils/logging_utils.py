@@ -9,40 +9,40 @@ CPU_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"  # standard Raspberry Pi
 
 
 def read_cpu_temp_c():
-    """Retourne la température CPU en °C, ou -1.0 si la lecture échoue.
+    """Return the CPU temperature in degrees C, or -1.0 if the read fails.
 
-    -1.0 est une sentinelle sans ambiguïté (température impossible en pratique) :
-    avant, un échec de lecture silencieux retournait 0.0/None, indiscernable d'une
-    vraie valeur dans le CSV de performance."""
+    -1.0 is an unambiguous sentinel (a temperature impossible in practice):
+    before, a silent read failure returned 0.0/None, indistinguishable from a
+    real value in the performance CSV."""
     try:
         with open(CPU_TEMP_PATH, "r") as f:
             milli_c = int(f.read().strip())
         return milli_c / 1000.0
     except Exception as e:
-        logger.warning(f"[Logging] Lecture température CPU échouée ({CPU_TEMP_PATH}) : {e}")
+        logger.warning(f"[Logging] CPU temperature read failed ({CPU_TEMP_PATH}): {e}")
         return -1.0
 
 
 CPU_FREQ_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
 
 def read_cpu_freq_mhz():
-    """Retourne la fréquence CPU en MHz, ou -1 si la lecture échoue (sentinelle
-    sans ambiguïté — avant, un échec silencieux retournait 0, indiscernable d'une
-    vraie valeur dans le CSV de performance)."""
+    """Return the CPU frequency in MHz, or -1 if the read fails (an unambiguous
+    sentinel -- before, a silent failure returned 0, indistinguishable from a
+    real value in the performance CSV)."""
     try:
         with open(CPU_FREQ_PATH, "r") as f:
             khz = int(f.read().strip())
         return int(khz / 1000)
     except Exception as e:
-        logger.warning(f"[Logging] Lecture fréquence CPU échouée ({CPU_FREQ_PATH}) : {e}")
+        logger.warning(f"[Logging] CPU frequency read failed ({CPU_FREQ_PATH}): {e}")
         return -1
 
 
-# LOG_DIR vient de utils.configs (source unique) : avant, ce fichier le
-# recalculait indépendamment avec la même logique -- ça ne causait pas de bug
-# aujourd'hui, mais un futur changement (ex: déplacer les logs vers un disque
-# externe) qui n'oublierait de le répercuter qu'ici aurait produit des fichiers
-# orphelins, ni nettoyés ni uploadés par le reste du pipeline.
+# LOG_DIR comes from utils.configs (single source): before, this file
+# recomputed it independently with the same logic -- that caused no bug today,
+# but a future change (e.g. moving the logs to an external disk) that forgot to
+# mirror it here would have produced orphaned files, neither cleaned up nor
+# uploaded by the rest of the pipeline.
 from utils.configs import LOG_DIR
 
 def get_dated_path(prefix, extension="csv"):
@@ -52,24 +52,24 @@ def get_dated_path(prefix, extension="csv"):
 
 def write_session_metadata(path, camera_model, model_path, tracker_path,
                            imgsz, confidence, capture_fps, extra=None):
-    """Ecrit la fiche de session : pose de la camera et configuration.
+    """Write the session record: camera pose and configuration.
 
-    Sans elle, les tailles en metres des detections sont irrecuperables des
-    qu'on touche au montage : le CSV conserve la boite en coordonnees relatives,
-    mais la conversion en metres depend de la hauteur, du tangage, de la focale
-    et du capteur, qui n'etaient traces nulle part. Un simple demontage pour
-    maintenance rendait toute la campagne anterieure ininterpretable.
+    Without it, the detection sizes in metres are unrecoverable as soon as the
+    mount is disturbed: the CSV keeps the box in relative coordinates, but the
+    conversion to metres depends on height, tilt, focal length and sensor, which
+    were traced nowhere. A simple dismantling for maintenance made the whole
+    preceding campaign uninterpretable.
 
-    Elle permet aussi de recalculer les tailles a posteriori avec la hauteur
-    d'eau reelle, sans rien changer sur le terrain.
+    It also allows sizes to be recomputed afterwards with the real water level,
+    without changing anything in the field.
     """
     import json as _json
     fiche = {
         "session": os.path.basename(path),
         "date": datetime.now().isoformat(timespec="seconds"),
         "pose": {
-            # Le repere doit etre celui du limnimetre : hauteur_m est mesuree
-            # au-dessus du zero de l'echelle, pas au-dessus de l'eau du jour.
+            # The datum must be the staff gauge: hauteur_m is measured above
+            # the gauge zero, not above the water on the day.
             "hauteur_m": float(camera_model.position[1]),
             "tangage_deg": float(camera_model.pitch_deg),
             "focale_mm": float(camera_model.focal_length),
@@ -88,8 +88,8 @@ def write_session_metadata(path, camera_model, model_path, tracker_path,
         with open(path, "w") as f:
             _json.dump(fiche, f, indent=2, ensure_ascii=False)
     except OSError as e:
-        # Meme philosophie que les loggers : on n'interrompt jamais l'agent.
-        print(f"\u26a0\ufe0f Fiche de session non ecrite ({e})")
+        # Same philosophy as the loggers: the agent is never interrupted.
+        print(f"\u26a0\ufe0f Session record not written ({e})")
     return fiche
 
 
@@ -100,19 +100,19 @@ class CSVLogger:
         else:
             self.path = path
 
-        # Si l'initialisation échoue (disque plein, FS en lecture seule), le
-        # logger passe en mode "broken" : il n'écrit plus rien mais ne fait
-        # jamais planter l'appelant. Avant, la moindre OSError ici remontait
-        # jusqu'à faire planter tout l'agent (caméra + IA + upload compris).
+        # If initialisation fails (disk full, read-only FS), the logger
+        # switches to "broken" mode: it writes nothing any more but never
+        # crashes the caller. Before, the slightest OSError here propagated all
+        # the way up and crashed the whole agent (camera, AI and upload included).
         self._broken = False
         self._closed = False
         self.file = None
         self.writer = None
         try:
-            # Créer dossier logs
+            # Create the logs directory
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
-            # Ouvrir fichier et header si nouveau fichier
+            # Open the file, and write the header if it is a new file
             file_exists = os.path.exists(self.path)
             self.file = open(self.path, "a", newline="")
             self.writer = csv.writer(self.file)
@@ -131,12 +131,12 @@ class CSVLogger:
                     "track_age"
                 ])
         except OSError as e:
-            logger.error(f"[CSVLogger] Init impossible ({self.path}) : {e} — logging désactivé pour cette session.")
+            logger.error(f"[CSVLogger] Init failed ({self.path}): {e} -- logging disabled for this session.")
             self._broken = True
 
     def log_detection(self, camera_id, class_id, conf, bbox, size, avg_size=(0.0, 0.0), track_id=-1, frame_id=-1, track_age=0):
-        """Enregistre une détection dans le CSV. No-op silencieux si le logger
-        est en mode "broken" (voir __init__/erreur d'écriture précédente)."""
+        """Record a detection in the CSV. A silent no-op if the logger is in
+        "broken" mode (see __init__ or an earlier write error)."""
         if self._broken:
             return
         try:
@@ -159,20 +159,20 @@ class CSVLogger:
             ])
 
             self.file.flush()
-            # flush() ne pousse les données que vers le cache du système, pas
-            # physiquement sur la carte SD -- fsync() le garantit. Site isolé
-            # sans batterie tampon : une coupure secteur brutale peut sinon
-            # perdre les dernières détections malgré le flush().
+            # flush() only pushes the data to the system cache, not physically
+            # onto the SD card -- fsync() guarantees that. Isolated site with no
+            # battery backup: a brutal power cut could otherwise lose the last
+            # detections despite the flush().
             os.fsync(self.file.fileno())
         except OSError as e:
-            logger.error(f"[CSVLogger] Écriture impossible ({self.path}) : {e} — logging désactivé pour cette session.")
+            logger.error(f"[CSVLogger] Write failed ({self.path}): {e} -- logging disabled for this session.")
             self._broken = True
 
     def close(self):
-        # Idempotent : un close() appelé deux fois (ex: régression future qui
-        # oublierait de vérifier l'état avant de recréer un logger) ne fait rien
-        # la seconde fois, au lieu de risquer une fuite de descripteur si le
-        # premier appel avait été sauté par erreur ailleurs dans le code.
+        # Idempotent: a close() called twice (e.g. a future regression that
+        # forgets to check the state before recreating a logger) does nothing the
+        # second time, instead of risking a descriptor leak if the first call had
+        # been skipped by mistake elsewhere in the code.
         if self._closed:
             return
         self._closed = True
@@ -207,13 +207,13 @@ class PerformanceLogger:
                     writer = csv.writer(f)
                     writer.writerow(["timestamp", "cam_fps", "inference_ms", "cpu_temp_c", "cpu_load_pct", "cpu_freq_mhz", "ram_usage_pct"])
         except OSError as e:
-            logger.error(f"[PerformanceLogger] Init impossible ({self.path}) : {e} — logging désactivé pour cette session.")
+            logger.error(f"[PerformanceLogger] Init failed ({self.path}): {e} -- logging disabled for this session.")
             self._broken = True
 
     def log_stats(self, cam_fps, inference_ms, cpu_temp, cpu_load, ram_usage):
-        """No-op silencieux si le logger est en mode "broken" (disque plein/FS
-        lecture seule détecté à l'init ou à une écriture précédente) — l'agent
-        (caméra, IA, upload) continue de tourner même si ces logs sont perdus."""
+        """A silent no-op if the logger is in "broken" mode (disk full or
+        read-only FS detected at init or on an earlier write) -- the agent
+        (camera, AI, upload) keeps running even if these logs are lost."""
         if self._broken:
             return self.path
 
@@ -232,18 +232,18 @@ class PerformanceLogger:
                     round(ram_usage, 1)
                 ])
                 f.flush()
-                # Même raisonnement que CSVLogger : flush() seul ne garantit pas
-                # une écriture physique sur la carte SD avant une coupure secteur.
+                # Same reasoning as CSVLogger: flush() alone does not guarantee
+                # a physical write to the SD card before a power cut.
                 os.fsync(f.fileno())
         except OSError as e:
-            logger.error(f"[PerformanceLogger] Écriture impossible ({self.path}) : {e} — logging désactivé pour cette session.")
+            logger.error(f"[PerformanceLogger] Write failed ({self.path}): {e} -- logging disabled for this session.")
             self._broken = True
         return self.path
 
     def close(self):
-        # Idempotent pour cohérence avec CSVLogger, même si le fichier est déjà
-        # ouvert/fermé à chaque écriture (rien à faire ici aujourd'hui, mais un
-        # futur refactor vers un descripteur persistant hériterait de ce garde-fou).
+        # Idempotent for consistency with CSVLogger, even though the file is
+        # already opened and closed on every write (nothing to do here today, but
+        # a future refactor to a persistent descriptor would inherit this guard).
         self._closed = True
 
     def __enter__(self):

@@ -16,15 +16,15 @@ NC='\033[0m' # No Color
 # --- Banner ---
 clear
 echo -e "${BLUE}"
-echo "   _____                            _     "
-echo "  |_   _|                          (_)    "
-echo "    | | ___ _ __ _ __ __ _ _ _ __  _ ___ "
-echo "    | |/ _ \ '__| '__/ _' | | '_ \| / __|"
-echo "    | |  __/ |  | | | (_| | | | | | \__ \\"
-echo "    \_/\___|_|  |_|  \__,_|_|_| |_|_|___/"
+echo "  _____   ____  __      __ ______ "
+echo " |  __ \ / __ \ \ \    / /|  ____|"
+echo " | |__) | |  | | \ \  / / | |__   "
+echo " |  _  /| |  | |  \ \/ /  |  __|  "
+echo " | | \ \| |__| |   \  /   | |____ "
+echo " |_|  \_\\____/     \/    |______|"
 echo "                                          "
 echo -e "${NC}"
-echo -e "${YELLOW}Agent Alpha 1 Test Terrain - Deployment Script${NC}"
+echo -e "${YELLOW}Agent - Deployment Script${NC}"
 echo "========================================="
 
 # --- 1. Checks ---
@@ -85,72 +85,72 @@ if [[ "$UPDATE_CONFIG" =~ ^[Yy]$ ]]; then
 fi
 
 # -> Agent Mode Config
-echo -e "\n${YELLOW}--- Mode d'upload 4G ---${NC}"
-echo "1) Mode Vidéo           — Upload vidéo complète si détections, supprime sinon (comportement original)"
-echo "2) Mode Snapshot        — JPEG annoté par détection uniquement, pas de vidéo (×100 moins de données 4G)"
-echo "3) Mode Vidéo + Snapshot — Vidéo enregistrée en local (carte SD) + JPEG uploadé sur 4G par détection"
-read -p "Sélectionnez le mode d'upload [2]: " AGENT_MODE_CHOICE
+echo -e "\n${YELLOW}--- 4G upload mode ---${NC}"
+echo "1) Video mode           - upload the full video if there were detections, delete it otherwise (original behaviour)"
+echo "2) Snapshot mode        - annotated JPEG per detection only, no video (x100 less 4G data)"
+echo "3) Video + Snapshot mode - video recorded locally (SD card) + JPEG uploaded over 4G per detection"
+read -p "Select the upload mode [2]: " AGENT_MODE_CHOICE
 AGENT_MODE_CHOICE=${AGENT_MODE_CHOICE:-2}
 
 EXTRA_ARGS=""
 if [ "$AGENT_MODE_CHOICE" -eq 1 ]; then
     EXTRA_ARGS="--upload-mode video"
-    echo -e "${GREEN}✓ Mode Vidéo sélectionné.${NC}"
-    # Option keep-all uniquement disponible en mode vidéo
-    echo -e "\n${YELLOW}--- Option conservation vidéo ---${NC}"
-    echo "1) Filtrage intelligent : supprime les vidéos sans détections (économise de la bande passante)"
-    echo "2) Conservation systématique : envoie toutes les vidéos même sans détections"
-    read -p "Sélectionnez [1]: " KEEP_ALL_CHOICE
+    echo -e "${GREEN}✓ Video mode selected.${NC}"
+    # The keep-all option only exists in video mode
+    echo -e "\n${YELLOW}--- Video retention option ---${NC}"
+    echo "1) Smart filtering: delete the videos without detections (saves bandwidth)"
+    echo "2) Keep everything: send every video, even without detections"
+    read -p "Select [1]: " KEEP_ALL_CHOICE
     KEEP_ALL_CHOICE=${KEEP_ALL_CHOICE:-1}
     if [ "$KEEP_ALL_CHOICE" -eq 2 ]; then
         EXTRA_ARGS="--upload-mode video --keep-all"
-        echo -e "${GREEN}✓ Conservation systématique activée.${NC}"
+        echo -e "${GREEN}✓ Keep everything enabled.${NC}"
     else
-        echo -e "${GREEN}✓ Filtrage intelligent activé.${NC}"
+        echo -e "${GREEN}✓ Smart filtering enabled.${NC}"
     fi
 elif [ "$AGENT_MODE_CHOICE" -eq 3 ]; then
     EXTRA_ARGS="--upload-mode video+snapshot"
-    echo -e "${GREEN}✓ Mode Vidéo + Snapshot sélectionné (vidéo locale, JPEG sur 4G).${NC}"
+    echo -e "${GREEN}✓ Video + Snapshot mode selected (local video, JPEG over 4G).${NC}"
 else
     EXTRA_ARGS="--upload-mode snapshot"
-    echo -e "${GREEN}✓ Mode Snapshot sélectionné (JPEG uniquement sur 4G).${NC}"
+    echo -e "${GREEN}✓ Snapshot mode selected (JPEG over 4G only).${NC}"
 fi
 
 # -> GSM / 4G Connection Config (Optional)
-echo -e "\n${YELLOW}--- Configuration Connexion GSM / 4G ---${NC}"
-read -p "Activer et configurer la connexion GSM / 4G ? (y/N): " SETUP_GSM
+echo -e "\n${YELLOW}--- GSM / 4G connection setup ---${NC}"
+read -p "Enable and configure the GSM / 4G connection? (y/N): " SETUP_GSM
 if [[ "$SETUP_GSM" =~ ^[Yy]$ ]]; then
-    echo -e "${BLUE}>>> Installation de NetworkManager et ModemManager...${NC}"
+    echo -e "${BLUE}>>> Installing NetworkManager and ModemManager...${NC}"
     apt-get update
     apt-get install network-manager modemmanager -y
     
-    read -p "APN de votre carte SIM [sl2sfr]: " APN_NAME
+    read -p "APN of your SIM card [sl2sfr]: " APN_NAME
     APN_NAME=${APN_NAME:-"sl2sfr"}
     
-    read -p "Code PIN de votre carte SIM (laisser vide si aucun) []: " SIM_PIN
+    read -p "PIN code of your SIM card (leave blank if none) []: " SIM_PIN
     
-    echo -e "${BLUE}>>> Configuration de la connexion GSM avec nmcli...${NC}"
-    # Suppression de l'ancienne connexion pour éviter les doublons
+    echo -e "${BLUE}>>> Configuring the GSM connection with nmcli...${NC}"
+    # Delete the previous connection, to avoid duplicates
     nmcli connection delete "4G-Mobile" >/dev/null 2>&1
     
-    # Création de la connexion GSM
+    # Create the GSM connection
     nmcli connection add type gsm ifname "*" con-name "4G-Mobile" apn "$APN_NAME"
     
-    # Configuration (Pas de PIN, connexion automatique, métrique de route et timeout)
+    # Settings (no PIN, autoconnect, route metric and timeout)
     nmcli connection modify "4G-Mobile" \
         gsm.pin "$SIM_PIN" \
         connection.autoconnect yes \
         ipv4.route-metric 10 \
         connection.wait-device-timeout 30
         
-    echo -e "${GREEN}✓ Connexion GSM '4G-Mobile' configurée avec succès (APN: $APN_NAME).${NC}"
+    echo -e "${GREEN}✓ GSM connection '4G-Mobile' configured successfully (APN: $APN_NAME).${NC}"
     
-    # Note: Le script bash check_4g.sh a été retiré car il entre en conflit avec le watchdog Python.
+    # Note: the check_4g.sh bash script was removed, it conflicted with the Python watchdog.
 fi
 
 # --- 4. Optimisation de l'alimentation USB ---
-echo -e "\n${YELLOW}--- Optimisation de l'alimentation USB ---${NC}"
-echo -e "${BLUE}>>> Débridage du courant USB pour le modem 4G...${NC}"
+echo -e "\n${YELLOW}--- USB power optimisation ---${NC}"
+echo -e "${BLUE}>>> Lifting the USB current limits for the 4G modem...${NC}"
 CONFIG_MODIFIED=0
 for CFG_FILE in "/boot/firmware/config.txt" "/boot/config.txt"; do
     if [ -f "$CFG_FILE" ]; then
@@ -160,46 +160,46 @@ for CFG_FILE in "/boot/firmware/config.txt" "/boot/config.txt"; do
         if ! grep -q "^usb_max_current_enable=1" "$CFG_FILE"; then
             echo "usb_max_current_enable=1" >> "$CFG_FILE"
         fi
-        echo -e "${GREEN}✓ Limites d'alimentation USB débridées dans $CFG_FILE.${NC}"
-        echo -e "${RED}⚠ Un REDÉMARRAGE du Raspberry Pi est nécessaire pour appliquer ce changement.${NC}"
-        echo -e "${YELLOW}  Tant qu'il n'a pas eu lieu, l'ancienne limite de courant USB reste active.${NC}"
+        echo -e "${GREEN}✓ USB power limits lifted in $CFG_FILE.${NC}"
+        echo -e "${RED}⚠ A REBOOT of the Raspberry Pi is required to apply this change.${NC}"
+        echo -e "${YELLOW}  Until it happens, the previous USB current limit stays in force.${NC}"
         CONFIG_MODIFIED=1
-        break # Modifie le bon fichier de config (firmware a la priorité sur les OS récents)
+        break # Edit the right config file (firmware takes precedence on recent OS releases)
     fi
 done
 if [ "$CONFIG_MODIFIED" -eq 0 ]; then
-    echo -e "${YELLOW}⚠ Fichier config.txt introuvable, impossible de débrider l'alimentation USB.${NC}"
+    echo -e "${YELLOW}⚠ config.txt not found, cannot lift the USB power limits.${NC}"
 fi
 
-# --- 5. Dépendances système (rsync + sshpass) ---
-echo -e "\n${BLUE}>>> Installation des dépendances système...${NC}"
-# rsync est généralement pré-installé sur Raspberry Pi OS.
-# sshpass permet à rsync d'utiliser une authentification par mot de passe
-# sans intervention manuelle — requis pour l'upload automatique vers le NAS.
+# --- 5. System dependencies (rsync + sshpass) ---
+echo -e "\n${BLUE}>>> Installing the system dependencies...${NC}"
+# rsync is generally pre-installed on Raspberry Pi OS.
+# sshpass lets rsync use password authentication without manual intervention --
+# required for the automatic upload to the NAS.
 apt-get install -y rsync sshpass 2>/dev/null
 if command -v rsync &>/dev/null && command -v sshpass &>/dev/null; then
-    echo -e "${GREEN}✓ rsync + sshpass installés. Mode upload rsync activé.${NC}"
+    echo -e "${GREEN}✓ rsync + sshpass installed. rsync upload mode enabled.${NC}"
 else
-    echo -e "${YELLOW}⚠ rsync/sshpass non disponibles. Fallback sur SFTP paramiko.${NC}"
+    echo -e "${YELLOW}⚠ rsync/sshpass unavailable. Falling back to paramiko SFTP.${NC}"
 fi
 
-# --- 5b. Pile caméra (picamera2 / libcamera) ---
-# Installée par apt et NON par pip : les liaisons Python de libcamera sont
-# construites contre la libcamera du système et ne sont pas publiées sur PyPI.
-# Le paquet picamera2 de PyPI ne déclare même pas libcamera dans ses dépendances,
-# un `pip install picamera2` donnerait donc un module qui échoue à l'import.
-# C'est pour rendre ce paquet apt visible depuis le venv que celui-ci est créé
-# avec --system-site-packages (section 6).
-# Sans picamera2, camera/camera_threads.py bascule sur sa caméra simulée, dont la
-# configuration à deux flux échoue : l'agent tourne alors en boucle
-# « caméra indisponible » sans jamais rien enregistrer.
-echo -e "\n${BLUE}>>> Installation de la pile caméra (picamera2)...${NC}"
+# --- 5b. Camera stack (picamera2 / libcamera) ---
+# Installed through apt and NOT through pip: the Python bindings of libcamera
+# are built against the system libcamera and are not published on PyPI.
+# The PyPI picamera2 package does not even declare libcamera among its
+# dependencies, so a `pip install picamera2` would yield a module that fails to
+# import. It is to make this apt package visible from the venv that the latter
+# is created with --system-site-packages (section 6).
+# Without picamera2, camera/camera_threads.py falls back to its mock camera,
+# whose two-stream configuration fails: the agent then loops on
+# "camera unavailable" without ever recording anything.
+echo -e "\n${BLUE}>>> Installing the camera stack (picamera2)...${NC}"
 apt-get install -y python3-picamera2 2>/dev/null
 if python3 -c "import picamera2" 2>/dev/null; then
-    echo -e "${GREEN}✓ picamera2 disponible.${NC}"
+    echo -e "${GREEN}✓ picamera2 available.${NC}"
 else
-    echo -e "${RED}✗ picamera2 indisponible — l'agent ne pourra pas acquérir d'images.${NC}"
-    echo -e "${YELLOW}  Installer manuellement : sudo apt-get install python3-picamera2${NC}"
+    echo -e "${RED}✗ picamera2 unavailable -- the agent will not be able to acquire images.${NC}"
+    echo -e "${YELLOW}  Install it manually: sudo apt-get install python3-picamera2${NC}"
 fi
 
 # --- 6. Python Environment ---
@@ -215,39 +215,39 @@ echo "Installing Python Libraries..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# --- 6b. Création et permissions des dossiers de données ---
-# Le script tourne en root mais le service tourne sous USER_NAME.
-# On crée explicitement les dossiers et on les attribue au bon utilisateur
-# pour éviter les PermissionError au démarrage du service.
+# --- 6b. Creation and permissions of the data directories ---
+# The script runs as root but the service runs as USER_NAME.
+# The directories are created explicitly and assigned to the right user, to
+# avoid PermissionError at service start-up.
 USER_NAME_TMP=$SUDO_USER
 if [ -z "$USER_NAME_TMP" ]; then USER_NAME_TMP=$(logname); fi
 
-echo -e "\n${BLUE}>>> Création des dossiers de données (logs/ et videos/)...${NC}"
+echo -e "\n${BLUE}>>> Creating the data directories (logs/ and videos/)...${NC}"
 mkdir -p "${WORK_DIR}/logs"
 mkdir -p "${WORK_DIR}/videos"
 chown -R "${USER_NAME_TMP}:${USER_NAME_TMP}" "${WORK_DIR}/logs"
 chown -R "${USER_NAME_TMP}:${USER_NAME_TMP}" "${WORK_DIR}/videos"
 chown -R "${USER_NAME_TMP}:${USER_NAME_TMP}" "${WORK_DIR}/${VENV_DIR}"
-echo -e "${GREEN}✓ Dossiers logs/ et videos/ créés et attribués à '${USER_NAME_TMP}'.${NC}"
+echo -e "${GREEN}✓ Directories logs/ and videos/ created and assigned to '${USER_NAME_TMP}'.${NC}"
 
 # --- 6c. Configuration des droits sudo pour le Watchdog Modem ---
-# Le watchdog Python a besoin de manipuler l'interface réseau (ip link) et d'éteindre/rallumer le port USB
-# du modem via /sys (écrit avec `tee`, jamais via un shell). La règle est restreinte à ces
-# commandes précises — jamais /bin/bash — pour qu'une faille dans une dépendance Python ne
-# devienne pas une élévation de privilèges root complète.
-echo -e "\n${BLUE}>>> Configuration des permissions sudo restreintes pour le Watchdog...${NC}"
+# The Python watchdog needs to manipulate the network interface (ip link) and to power the
+# modem USB port off and on through /sys (written with `tee`, never through a shell). The rule
+# is restricted to those precise commands -- never /bin/bash -- so that a flaw in a Python
+# dependency does not become a full root privilege escalation.
+echo -e "\n${BLUE}>>> Configuring the restricted sudo permissions for the watchdog...${NC}"
 SUDOERS_FILE="/etc/sudoers.d/agent_terrain_watchdog"
 SUDOERS_TMP="$(mktemp)"
 cat > "$SUDOERS_TMP" <<EOF
-# Autorisations pour le watchdog de l'Agent Alpha 1 (strict nécessaire uniquement)
+# Permissions for the Agent Alpha 1 watchdog (strict minimum only)
 ${USER_NAME_TMP} ALL=(root) NOPASSWD: /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/ip link set * up, /usr/bin/ip link set * down, /usr/bin/tee /sys/bus/usb/devices/*/authorized, /usr/sbin/reboot, /sbin/reboot
 EOF
 if visudo -c -f "$SUDOERS_TMP" >/dev/null 2>&1; then
     install -m 0440 "$SUDOERS_TMP" "$SUDOERS_FILE"
-    echo -e "${GREEN}✓ Droits sudo restreints configurés pour '${USER_NAME_TMP}' dans ${SUDOERS_FILE}.${NC}"
+    echo -e "${GREEN}✓ Restricted sudo rights configured for '${USER_NAME_TMP}' in ${SUDOERS_FILE}.${NC}"
 else
-    echo -e "${RED}✗ Erreur de syntaxe dans la règle sudoers générée — rien n'a été installé.${NC}"
-    echo -e "${YELLOW}  Le watchdog modem n'aura pas les droits nécessaires tant que ce n'est pas corrigé.${NC}"
+    echo -e "${RED}✗ Syntax error in the generated sudoers rule -- nothing was installed.${NC}"
+    echo -e "${YELLOW}  The modem watchdog will lack the required rights until this is fixed.${NC}"
 fi
 rm -f "$SUDOERS_TMP"
 
@@ -278,7 +278,7 @@ systemctl daemon-reload
 systemctl enable agent_terrain.service
 echo -e "${GREEN}✓ Service agent_terrain.service created and enabled.${NC}"
 
-# S'assurer que le répertoire de travail est accessible au service
+# Make sure the working directory is reachable by the service
 chown "${USER_NAME}:${USER_NAME}" "${WORK_DIR}" 2>/dev/null || true
 
 # --- 7. Final Summary ---
@@ -292,20 +292,20 @@ echo -e "Agent Name   : ${YELLOW}${CURRENT_HOSTNAME}${NC}"
 echo -e "Local IP     : ${YELLOW}${MY_IP}${NC}"
 if [ "$AGENT_MODE_CHOICE" -eq 1 ]; then
     if echo "$EXTRA_ARGS" | grep -q "keep-all"; then
-        echo -e "Upload Mode  : ${YELLOW}Vidéo (Conservation systématique)${NC}"
+        echo -e "Upload Mode  : ${YELLOW}Video (keep everything)${NC}"
     else
-        echo -e "Upload Mode  : ${YELLOW}Vidéo (Filtrage intelligent)${NC}"
+        echo -e "Upload Mode  : ${YELLOW}Video (smart filtering)${NC}"
     fi
 elif [ "$AGENT_MODE_CHOICE" -eq 3 ]; then
-    echo -e "Upload Mode  : ${YELLOW}Vidéo locale + Snapshot 4G${NC}"
+    echo -e "Upload Mode  : ${YELLOW}Local video + 4G snapshot${NC}"
 else
-    echo -e "Upload Mode  : ${YELLOW}Snapshot JPEG uniquement${NC}"
+    echo -e "Upload Mode  : ${YELLOW}JPEG snapshot only${NC}"
 fi
 
 if [[ "$SETUP_GSM" =~ ^[Yy]$ ]]; then
-    echo -e "GSM / 4G     : ${YELLOW}Configuré (APN: $APN_NAME)${NC}"
+    echo -e "GSM / 4G     : ${YELLOW}Configured (APN: $APN_NAME)${NC}"
 else
-    echo -e "GSM / 4G     : ${YELLOW}Ignoré / Non modifié${NC}"
+    echo -e "GSM / 4G     : ${YELLOW}Skipped / unchanged${NC}"
 fi
 echo "-----------------------------------------"
 echo -e "${YELLOW}IMPORTANT NEXT STEPS:${NC}"

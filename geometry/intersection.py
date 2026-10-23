@@ -124,17 +124,18 @@ def get_largest_diameters(camera, rect_x, rect_y, rect_width, rect_height):
     - rect_width, rect_height: Width and height of the rectangle in pixels
 
     Returns:
-    - tuple: (largest_x_diameter, largest_y_diameter), ou (nan, nan) si la
-      géométrie est dégénérée (bbox de largeur ou hauteur nulle -> rayons de
-      coin colinéaires -> get_box_planes ne peut pas produire les 4 plans).
+    - tuple: (largest_x_diameter, largest_y_diameter), or (nan, nan) when the
+      geometry is degenerate (a bbox of zero width or height -> collinear corner
+      rays -> get_box_planes cannot produce the 4 planes).
     """
     planes = get_box_planes(camera, rect_x, rect_y, rect_width, rect_height)
 
-    # Bbox dégénérée (largeur/hauteur nulle, coin dupliqué, etc.) : get_box_planes
-    # peut ne pas contenir les 4 clés attendues. Avant, l'accès direct plus bas
-    # (distances['top'], ...) levait un KeyError non géré qui remontait jusqu'à
-    # planter tout l'agent. On ne peut simplement pas mesurer cet objet : NaN,
-    # à charge pour l'appelant (voir detection/tracker.py) de l'exclure proprement.
+    # Degenerate bbox (zero width or height, duplicated corner, etc.): get_box_planes
+    # may not contain the 4 expected keys. Before, the direct access below
+    # (distances['top'], ...) raised an unhandled KeyError that propagated all the
+    # way up and crashed the whole agent. This object simply cannot be measured:
+    # return NaN and leave it to the caller (see detection/tracker.py) to exclude
+    # it cleanly.
     if not all(k in planes for k in ('top', 'bottom', 'left', 'right')):
         return float('nan'), float('nan')
 

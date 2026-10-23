@@ -1,12 +1,12 @@
 """
 alerting.py
 -----------
-Canal d'alerte minimal pour un système sans supervision humaine directe.
+Minimal alert channel for a system with no direct human supervision.
 
-Aucune notification externe (SMS/email/webhook) n'est configurée pour l'instant :
-ce module écrit un fichier texte horodaté dans LOG_DIR, qui remonte au NAS via le
-mécanisme d'upload SFTP existant dès que la connexion le permet. C'est un strict
-minimum — l'opérateur doit consulter le NAS régulièrement pour voir ces alertes.
+No external notification (SMS/email/webhook) is configured for now: this module
+writes a timestamped text file into LOG_DIR, which travels to the NAS through the
+existing SFTP upload mechanism as soon as the link allows. It is a bare minimum --
+the operator has to check the NAS regularly to see these alerts.
 """
 
 import os
@@ -15,10 +15,10 @@ from utils.configs import LOG_DIR
 
 
 def write_alert(source: str, message: str) -> str:
-    """Écrit un fichier ALERTE_<source>_<timestamp>.txt dans LOG_DIR.
+    """Write an ALERTE_<source>_<timestamp>.txt file into LOG_DIR.
 
-    Retourne le chemin du fichier créé (chaîne vide en cas d'échec d'écriture),
-    à passer ensuite à SFTPManager.upload_file() pour qu'il remonte au NAS.
+    Returns the path of the created file (an empty string if the write failed),
+    to be passed on to SFTPManager.upload_file() so it reaches the NAS.
     """
     os.makedirs(LOG_DIR, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -27,7 +27,7 @@ def write_alert(source: str, message: str) -> str:
         with open(path, "w") as f:
             f.write(f"[{datetime.datetime.now().isoformat()}] {message}\n")
     except Exception as e:
-        print(f"⚠️ [Alerte] Impossible d'écrire le fichier d'alerte : {e}")
+        print(f"⚠️ [Alert] Could not write the alert file: {e}")
         return ""
-    print(f"🚨 ALERTE : {message}")
+    print(f"🚨 ALERT: {message}")
     return path
