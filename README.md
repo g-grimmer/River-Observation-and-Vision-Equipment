@@ -4,6 +4,7 @@
 [![Platform Raspberry Pi 5](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red.svg?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/)
 [![YOLO26n NCNN](https://img.shields.io/badge/AI-YOLO26n%20%2F%20NCNN-orange.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://ultralytics.com)
 [![License AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=for-the-badge)](./LICENSE)
+[![DOI](https://zenodo.org/badge/1434269277.svg)](https://doi.org/10.5281/zenodo.23723133)
 
 Embedded software for an autonomous riverside station that counts and sizes floating debris on a **Raspberry Pi 5**, and transmits its results over 4G.
 
