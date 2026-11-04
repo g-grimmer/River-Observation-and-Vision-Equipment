@@ -9,7 +9,10 @@ because it forces a USB power cycle of the module.
 
 This module reproduces the effect of that reboot *without* restarting the Pi:
   1. Periodic ping of a reliable server (8.8.8.8), bound to the identified 4G
-     interface (never a "general" ping, which could travel over Ethernet or Wi-Fi)
+     interface (never a "general" ping, which could travel over Ethernet or Wi-Fi).
+     Every 30 min while the link is healthy, every 30 s as soon as a ping fails,
+     plus an extra check requested by SFTPManager shortly before each scheduled
+     send (see request_check)
   2. If N consecutive pings fail -> network interface down/up
   3. If the down/up fails -> USB reset of the modem through /sys
   4. If everything fails -> AT+CFUN=1,1 over the serial port (firmware reset)
@@ -51,7 +54,16 @@ PING_HOST_FALLBACK = "1.1.1.1"      # Fallback if the main target does not answe
                                      # one IP without the 4G link being down)
 PING_COUNT       = 2                 # Packets sent per check
 PING_TIMEOUT     = 5                 # Max seconds per ping
-CHECK_INTERVAL   = 30                # Seconds between two normal checks
+CHECK_INTERVAL   = 1800              # Seconds between two normal checks. Every
+                                     # ping wakes the radio out of idle for several
+                                     # seconds: at 30 s it was almost never idle.
+                                     # Uploads only happen at scheduled times, and
+                                     # SFTPManager asks for a check just before each
+                                     # one (request_check), so a rare check is enough
+                                     # the rest of the time.
+FAILURE_RETRY_INTERVAL = 30          # Seconds between checks once a ping has failed:
+                                     # the repair still starts ~1 min after the
+                                     # first failure, whatever CHECK_INTERVAL is
 MAX_FAILURES     = 3                 # Consecutive failures before acting
 RECOVERY_COOLDOWN = 120              # Rest seconds after a recovery (1st total failure)
 MAX_RECOVERY_COOLDOWN = 3600         # Exponential backoff ceiling (1h) after repeated failures
@@ -100,6 +112,8 @@ class ModemWatchdog(threading.Thread):
         # NAS when every recovery attempt fails (no external SMS/email/webhook
         # notification is configured).
         self._sftp_manager = sftp_manager
+        # Set by request_check() (or stop()) to cut the current wait short.
+        self._wake = threading.Event()
 
         logger.info(
             f"[Watchdog] Initialised -- pinging {self.ping_host} "
@@ -117,7 +131,21 @@ class ModemWatchdog(threading.Thread):
 
     def stop(self):
         self.running = False
+        self._wake.set()
         logger.info("[Watchdog] Stopped.")
+
+    def request_check(self):
+        """Run a check now instead of at the end of the current wait. Called by
+        SFTPManager a few minutes before each scheduled send, so that a modem
+        frozen since the last check is repaired before the files leave rather
+        than making each of them exhaust its upload attempts."""
+        logger.info("[Watchdog] Check requested before a scheduled send.")
+        self._wake.set()
+
+    def _wait(self, seconds):
+        """Sleep up to `seconds`, or less if request_check()/stop() is called."""
+        self._wake.wait(seconds)
+        self._wake.clear()
 
     @property
     def is_connected(self) -> bool:
@@ -159,7 +187,7 @@ class ModemWatchdog(threading.Thread):
                             f"(after {self._failure_count} failures)"
                         )
                     self._failure_count = 0
-                    time.sleep(self.check_interval)
+                    self._wait(self.check_interval)
                 else:
                     # Capped at max_failures: beyond that the number carries no
                     # more decision value (the threshold is already reached) and
@@ -190,16 +218,16 @@ class ModemWatchdog(threading.Thread):
                                 f"consecutive total failures: {self._consecutive_total_failures}) "
                                 f"-- waiting {wait}s before the next attempt"
                             )
-                            time.sleep(min(wait, self.check_interval))
+                            self._wait(min(wait, FAILURE_RETRY_INTERVAL))
                         else:
                             self._attempt_recovery()
                     else:
                         # Retry faster as long as the threshold is not reached
-                        time.sleep(max(5, self.check_interval // 3))
+                        self._wait(FAILURE_RETRY_INTERVAL)
 
             except Exception as exc:
                 logger.error(f"[Watchdog] Unexpected error: {exc}", exc_info=True)
-                time.sleep(self.check_interval)
+                self._wait(FAILURE_RETRY_INTERVAL)
 
     # -----------------------------------------------------------------------
     # Ping

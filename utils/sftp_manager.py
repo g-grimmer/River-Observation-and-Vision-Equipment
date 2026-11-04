@@ -53,6 +53,11 @@ class SFTPManager:
         self.scheduler: Optional[threading.Thread] = None
         self._queued = set()
         self._queued_lock = threading.Lock()
+        # Called PRE_SEND_CHECK_MINUTES before each slot (main.py plugs in
+        # ModemWatchdog.request_check): the watchdog only pings every 30 min, so
+        # without this a send could start on a modem frozen since the last ping.
+        self.before_send = None
+        self.PRE_SEND_CHECK_MINUTES = 5
 
         # Detect the available upload method.
         # Priority: rsync (resumes interrupted transfers) > paramiko SFTP (fallback).
@@ -342,6 +347,7 @@ class SFTPManager:
             f"{', '.join(f'{h:02d}:{m:02d}' for h, m in self.schedule)} -- "
             f"next one at {next_slot:%Y-%m-%d %H:%M}."
         )
+        pre_check_done = False
         while self.running:
             time.sleep(10)
             now = datetime.datetime.now()
@@ -349,7 +355,16 @@ class SFTPManager:
             # after boot, which would leave next_slot far in the future.
             if next_slot - now > datetime.timedelta(days=1):
                 next_slot = self._next_slot(now)
+                pre_check_done = False
+            if (not pre_check_done and self.before_send
+                    and now >= next_slot - datetime.timedelta(minutes=self.PRE_SEND_CHECK_MINUTES)):
+                pre_check_done = True
+                try:
+                    self.before_send()
+                except Exception as e:
+                    print(f"⚠️ [Upload] Pre-send check failed: {e}")
             if now >= next_slot:
+                pre_check_done = False
                 self._flush_outbox()
                 next_slot = self._next_slot(datetime.datetime.now())
                 print(f"🕒 [Upload] Next scheduled send at {next_slot:%Y-%m-%d %H:%M}.")

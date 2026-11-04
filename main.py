@@ -99,6 +99,7 @@ class TestAgent:
         # without rebooting when it freezes (steady red LEDs)
         self.modem_watchdog = ModemWatchdog(sftp_manager=self.sftp)
         self.modem_watchdog.start()
+        self.sftp.before_send = self.modem_watchdog.request_check
         self.logger = None
         self.perf_logger = None
         self.tracker = None

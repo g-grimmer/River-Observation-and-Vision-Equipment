@@ -143,7 +143,7 @@ If you enable this option in `setup_agent.sh`:
     *   `connection.autoconnect yes` — automatic reconnection on signal loss.
     *   `ipv4.route-metric 10` — 4G becomes the default route, ahead of Ethernet.
     *   `connection.wait-device-timeout 30` — gives the modem time to appear at boot.
-4.  **Network watchdog (`ModemWatchdog`)**, a background thread that pings `8.8.8.8` bound to the cellular interface, then escalates: interface down/up, hardware USB reset, `AT+CFUN=1,1` firmware reset, NetworkManager reconnection. Exponential backoff after a complete failure, and an alert file transmitted to the NAS as soon as the link returns.
+4.  **Network watchdog (`ModemWatchdog`)**, a background thread that pings `8.8.8.8` bound to the cellular interface — every 30 min while the link is healthy (so the radio stays idle), every 30 s once a ping fails, and 5 min before each scheduled send — then escalates: interface down/up, hardware USB reset, `AT+CFUN=1,1` firmware reset, NetworkManager reconnection. Exponential backoff after a complete failure, and an alert file transmitted to the NAS as soon as the link returns.
 5.  **Disk cleaner (`DiskCleaner`)**: above **80 %** occupancy, recursively purges the oldest files until back down to **75 %**.
 
 ---
