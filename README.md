@@ -64,6 +64,7 @@ River-Observation-and-Vision-Equipment/
 ├── docs/                        # Documentation assets
 ├── logs/                        # CSV, session records, alerts (created on demand)
 ├── videos/                      # Videos and snapshots (created on demand)
+├── outbox/                      # Files waiting for the next scheduled send
 ├── main.py                      # Field agent: main loop, sessions, snapshots
 ├── run_agent.sh                 # Supervisor: restart on crash, log rotation
 ├── setup_agent.sh               # Installation wizard and systemd service
@@ -175,6 +176,7 @@ The defaults are bench values. Counts and trajectories stay valid without them, 
 | Parameter                   | Default                 | Description                             | Recommended values                           |
 | --------------------------- | ----------------------- | --------------------------------------- | -------------------------------------------- |
 | `ROTATION_MINUTES`          | `5`                     | session length                          | `5` (4G) / `15` (WiFi)                       |
+| `UPLOAD_SCHEDULE`           | `["00:00", "08:00", "16:00"]` | times of the 4G sends; closed files wait in `outbox/` in between, alerts included | `[]` = send each file as soon as its session closes |
 | `CONFIDENCE`                | `0.10`                  | detector threshold                      | deliberately permissive, the tracker filters |
 | `VIDEO_FPS` / `CAPTURE_FPS` | `3.0`                   | acquisition and analysis rate           | `3` (333 ms per frame budget)                |
 | `HI_RES_SIZE`               | `(1280, 720)`           | video and snapshot resolution           | `(1920, 1080)` with wide bandwidth           |
@@ -247,7 +249,7 @@ Every 10 seconds the agent summarises its state:
 1. Both cameras detected, and the right one is camera 0: `rpicam-hello --list-cameras`, then `rpicam-hello --camera 0 --timeout 3000`. If they are swapped, the instrument observes daylight with the infrared sensor without reporting any error.
 2. Camera pose surveyed and written to `utils/configs.py`.
 3. 4G link up and preferred over any wired fallback: `ip route show default` must show the modem interface with the lower metric.
-4. First transfer confirmed in the journal: a successful upload followed by the local file being removed.
+4. First transfer confirmed in the journal: a successful upload followed by the local file being removed. With `UPLOAD_SCHEDULE` set, it only happens at the next slot (the journal prints `Next scheduled send at …` at start-up); set `UPLOAD_SCHEDULE = []` temporarily to check the link straight away.
 5. `vcgencmd get_throttled` returns `0x0`.
 
 ---

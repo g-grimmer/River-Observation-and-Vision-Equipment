@@ -108,13 +108,25 @@ TRACKER_CONFIG_PATH = TRACKER_CONFIG_DAY   # default, before the first switch
 # Rotation Settings
 ROTATION_MINUTES = 5  # Duration of each video sequence (minutes)
 
+# --- Upload schedule ---
+# Times of day ("HH:MM", local time) at which the files closed since the last
+# send leave over 4G. Sessions keep rotating every ROTATION_MINUTES in between:
+# their files wait in OUTBOX_DIR, on disk, so that they survive a restart and
+# are not limited by the 50 slots of the in-memory upload queue. Alert files
+# wait for the next slot like everything else.
+# Three slots 8 h apart cover the 24 h uniformly. An empty list restores the
+# original behaviour: every file is sent as soon as its session closes.
+UPLOAD_SCHEDULE = ["00:00", "08:00", "16:00"]
+
 # --- Local Storage ---
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+OUTBOX_DIR = os.path.join(BASE_DIR, "outbox")
 
 # Ensure dirs exist
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(OUTBOX_DIR, exist_ok=True)
 
 # --- SFTP Configuration ---
 # Intentionally blank in the repository. These four values are filled in at

@@ -1,3 +1,4 @@
+import datetime
 import threading
 import os
 import glob
@@ -8,7 +9,7 @@ import time
 from typing import Optional
 from utils.configs import (
     SFTP_HOST, SFTP_PORT, SFTP_USERNAME, SFTP_PASSWORD, SFTP_REMOTE_DIR,
-    LOG_DIR, ROTATION_MINUTES,
+    LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, UPLOAD_SCHEDULE,
 )
 
 
@@ -44,6 +45,15 @@ class SFTPManager:
         # never cut off.
         self.upload_in_progress = threading.Event()
 
+        # Scheduled sends (UPLOAD_SCHEDULE): upload_file() parks the files in
+        # OUTBOX_DIR and the scheduler thread only feeds them to the queue at the
+        # planned times. _queued holds the paths currently in the queue, so that
+        # a file still being retried when the next slot comes is not queued twice.
+        self.schedule = self._parse_schedule(UPLOAD_SCHEDULE)
+        self.scheduler: Optional[threading.Thread] = None
+        self._queued = set()
+        self._queued_lock = threading.Lock()
+
         # Detect the available upload method.
         # Priority: rsync (resumes interrupted transfers) > paramiko SFTP (fallback).
         # rsync needs sshpass for password authentication.
@@ -67,6 +77,8 @@ class SFTPManager:
 
         self._start_upload_thread()
         self._rescan_orphaned_logs()
+        if self.schedule:
+            self._start_scheduler_thread()
 
         self.watchdog = threading.Thread(
             target=self._watchdog_loop, daemon=True, name="sftp-watchdog"
@@ -108,12 +120,20 @@ class SFTPManager:
     # -----------------------------------------------------------------------
 
     def upload_file(self, local_path):
-        """Add a file to the upload queue."""
+        """Hand a file over for upload: straight to the queue, or to OUTBOX_DIR
+        until the next slot when UPLOAD_SCHEDULE is set."""
         if not os.path.exists(local_path):
             print(f"⚠️ [Upload] File not found: {local_path}")
             return False
+        if self.schedule:
+            return self._move_to_outbox(local_path)
+        return self._enqueue(local_path)
+
+    def _enqueue(self, local_path):
         try:
             self.upload_queue.put_nowait(local_path)
+            with self._queued_lock:
+                self._queued.add(local_path)
             print(f"📥 [Upload] Queued: {os.path.basename(local_path)}")
             return True
         except queue.Full:
@@ -141,6 +161,9 @@ class SFTPManager:
             if self.running and not self.thread.is_alive():
                 print(f"⚠️ [Upload] Thread died! Restarting...")
                 self._start_upload_thread()
+            if self.running and self.scheduler and not self.scheduler.is_alive():
+                print(f"⚠️ [Upload] Scheduler thread died! Restarting...")
+                self._start_scheduler_thread()
 
     def _upload_loop(self):
         while self.running:
@@ -168,12 +191,10 @@ class SFTPManager:
                     # File vanished before the upload (see _try_rsync_upload /
                     # _try_paramiko_upload): nothing to retry, we stop tracking it
                     # without ever pretending it was a success.
-                    self._retry_after.pop(local_path, None)
-                    self._fail_count.pop(local_path, None)
+                    self._forget(local_path)
                 elif success:
                     print(f"✅ [Upload] Succeeded: {os.path.basename(local_path)}")
-                    self._retry_after.pop(local_path, None)
-                    self._fail_count.pop(local_path, None)
+                    self._forget(local_path)
                     try:
                         os.remove(local_path)
                         print(f"🗑️ [Upload] Local file deleted: {os.path.basename(local_path)}")
@@ -189,8 +210,7 @@ class SFTPManager:
                         # file name). We take it out of the active cycle rather than
                         # blocking useful capacity during a prolonged outage.
                         self._move_to_failed(local_path)
-                        self._retry_after.pop(local_path, None)
-                        self._fail_count.pop(local_path, None)
+                        self._forget(local_path)
                     else:
                         print(
                             f"❌ [Upload] Failed ({attempts}/{self.MAX_UPLOAD_ATTEMPTS}): "
@@ -272,7 +292,107 @@ class SFTPManager:
                 f"{os.path.basename(local_path)} abandoned (no automatic retry, "
                 f"the file stays on the local disk)."
             )
-            self._retry_after.pop(local_path, None)
+            self._forget(local_path)
+
+    def _forget(self, local_path):
+        """Stop tracking a file that has left the queue for good."""
+        self._retry_after.pop(local_path, None)
+        self._fail_count.pop(local_path, None)
+        with self._queued_lock:
+            self._queued.discard(local_path)
+
+    # -----------------------------------------------------------------------
+    # Scheduled sends
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_schedule(entries):
+        """["HH:MM", ...] -> sorted list of (hour, minute). An invalid entry is
+        reported and skipped rather than crashing the agent at start-up."""
+        slots = set()
+        for entry in entries or []:
+            try:
+                hour, minute = (int(x) for x in str(entry).split(":"))
+                if not (0 <= hour < 24 and 0 <= minute < 60):
+                    raise ValueError
+                slots.add((hour, minute))
+            except ValueError:
+                print(f"⚠️ [Upload] Invalid UPLOAD_SCHEDULE entry ignored: {entry!r}")
+        return sorted(slots)
+
+    def _next_slot(self, now):
+        """First scheduled time strictly after `now`."""
+        for day in (0, 1):
+            date = now.date() + datetime.timedelta(days=day)
+            for hour, minute in self.schedule:
+                slot = datetime.datetime.combine(date, datetime.time(hour, minute))
+                if slot > now:
+                    return slot
+
+    def _start_scheduler_thread(self):
+        self.scheduler = threading.Thread(
+            target=self._schedule_loop, daemon=True, name="sftp-scheduler"
+        )
+        self.scheduler.start()
+
+    def _schedule_loop(self):
+        next_slot = self._next_slot(datetime.datetime.now())
+        print(
+            f"🕒 [Upload] Scheduled sends at "
+            f"{', '.join(f'{h:02d}:{m:02d}' for h, m in self.schedule)} -- "
+            f"next one at {next_slot:%Y-%m-%d %H:%M}."
+        )
+        while self.running:
+            time.sleep(10)
+            now = datetime.datetime.now()
+            # The Pi has no RTC: the clock can jump backwards when NTP syncs
+            # after boot, which would leave next_slot far in the future.
+            if next_slot - now > datetime.timedelta(days=1):
+                next_slot = self._next_slot(now)
+            if now >= next_slot:
+                self._flush_outbox()
+                next_slot = self._next_slot(datetime.datetime.now())
+                print(f"🕒 [Upload] Next scheduled send at {next_slot:%Y-%m-%d %H:%M}.")
+
+    def _move_to_outbox(self, local_path):
+        """Park a closed file in OUTBOX_DIR until the next scheduled send."""
+        try:
+            os.replace(local_path, os.path.join(OUTBOX_DIR, os.path.basename(local_path)))
+            print(f"📦 [Upload] Waiting for the next send: {os.path.basename(local_path)}")
+            return True
+        except OSError as e:
+            print(f"⚠️ [Upload] Could not move {local_path} to {OUTBOX_DIR}/: {e}")
+            return False
+
+    def _flush_outbox(self):
+        """Feed the queue with every file waiting in OUTBOX_DIR, oldest first.
+
+        Files closed during the flush go out at the next slot. A few slots are
+        always left free in the queue: the upload thread puts its failures back
+        with put_nowait() (see _requeue) and would drop them if the scheduler
+        kept the queue full."""
+        try:
+            pending = [
+                os.path.join(OUTBOX_DIR, name) for name in os.listdir(OUTBOX_DIR)
+                if os.path.isfile(os.path.join(OUTBOX_DIR, name))
+            ]
+            pending.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+        except OSError as e:
+            print(f"⚠️ [Upload] Could not list {OUTBOX_DIR}/: {e}")
+            return
+
+        with self._queued_lock:
+            pending = [p for p in pending if p not in self._queued]
+        print(f"🚚 [Upload] Scheduled send: {len(pending)} file(s) to transfer.")
+
+        free_slots_kept = 10
+        for path in pending:
+            while self.running and self.upload_queue.qsize() >= self.upload_queue.maxsize - free_slots_kept:
+                time.sleep(1.0)
+            if not self.running:
+                return
+            if os.path.exists(path):
+                self._enqueue(path)
 
     # -----------------------------------------------------------------------
     # Upload dispatch

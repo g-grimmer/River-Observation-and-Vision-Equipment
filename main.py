@@ -20,7 +20,7 @@ from utils.configs import (
     VIDEO_EXTENSION, CAMERA_IDS, MODEL_PATH_DAY, MODEL_PATH_NIGHT, IMGSZ, CAPTURE_FPS,
     CAMERA_HAUTEUR_M, CAMERA_TANGAGE_DEG, CAMERA_FOCALE_MM, CAMERA_CAPTEUR_MM,
     TRACKER_CONFIG_DAY, TRACKER_CONFIG_NIGHT,
-    CONFIDENCE, VIDEO_DIR, LOG_DIR, ROTATION_MINUTES, est_jour
+    CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour
 )
 from utils.logging_utils import (CSVLogger, PerformanceLogger, read_cpu_temp_c,
                                  write_session_metadata)
@@ -273,7 +273,7 @@ class TestAgent:
         if old_meta: self.sftp.upload_file(old_meta)
 
         # Automatic disk cleanup, to avoid 24/7 saturation
-        cleanup_old_files([VIDEO_DIR, LOG_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
+        cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
         self._start_session()
 
@@ -363,7 +363,7 @@ class TestAgent:
                 if old_perf: self.sftp.upload_file(old_perf)
 
                 # Automatic disk cleanup
-                cleanup_old_files([VIDEO_DIR, LOG_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
+                cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
             if self.active_cam_thread:
                 self.active_cam_thread.stop()
