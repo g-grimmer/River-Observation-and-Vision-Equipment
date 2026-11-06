@@ -69,7 +69,15 @@ def est_jour(moment=None) -> bool:
 MODEL_PATH_DAY = os.path.join(BASE_DIR, "models_yolo26n", "yolo26n_day_best_ncnn_model")
 MODEL_PATH_NIGHT = os.path.join(BASE_DIR, "models_yolo26n", "yolo26n_night_best_ncnn_model")
 MODEL_PATH = MODEL_PATH_DAY
-CONFIDENCE = 0.10
+
+# Detector threshold. Chosen on the complete pipeline, tracker included, over
+# one held-out sequence per regime (05_RESULTS/06_PASSAGES): passages counted
+# exactly once go from 94.1 % to 100 % by day and from 27.3 % to 45.5 % at night
+# between 0.10 and 0.40, and night false positives are divided by 2.4. The
+# price is per-frame recall at night (86.4 -> 75.1 %). The former 0.10 left the
+# filtering to the tracker and was the worst setting in both regimes; it also
+# produced a snapshot for every phantom track, i.e. most of the 4G volume.
+CONFIDENCE = 0.40
 
 # Inference resolution, passed to Ultralytics by YoloDetector.
 IMGSZ = 960

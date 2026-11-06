@@ -177,7 +177,7 @@ The defaults are bench values. Counts and trajectories stay valid without them, 
 | --------------------------- | ----------------------- | --------------------------------------- | -------------------------------------------- |
 | `ROTATION_MINUTES`          | `5`                     | session length                          | `5` (4G) / `15` (WiFi)                       |
 | `UPLOAD_SCHEDULE`           | `["00:00", "08:00", "16:00"]` | times of the 4G sends; closed files wait in `outbox/` in between, alerts included | `[]` = send each file as soon as its session closes |
-| `CONFIDENCE`                | `0.10`                  | detector threshold                      | deliberately permissive, the tracker filters |
+| `CONFIDENCE`                | `0.40`                  | detector threshold                      | best count on the full pipeline (100 % by day, 45.5 % at night vs 94.1 % / 27.3 % at 0.10) |
 | `VIDEO_FPS` / `CAPTURE_FPS` | `3.0`                   | acquisition and analysis rate           | `3` (333 ms per frame budget)                |
 | `HI_RES_SIZE`               | `(1280, 720)`           | video and snapshot resolution           | `(1920, 1080)` with wide bandwidth           |
 | `FRAME_SIZE`                | `(960, 540)`            | AI stream                               | ⚠️ **do not change**: must stay 16:9          |
