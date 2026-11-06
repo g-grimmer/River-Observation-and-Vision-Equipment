@@ -388,7 +388,7 @@ sudo systemctl restart agent_terrain
 
 # Remove the watchdog's reboot right (recommended on a remote site)
 sudo tee /etc/sudoers.d/agent_terrain_watchdog <<EOF
-$USER ALL=(root) NOPASSWD: /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/ip link set * up, /usr/bin/ip link set * down, /usr/bin/tee /sys/bus/usb/devices/*/authorized
+$USER ALL=(root) NOPASSWD: /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/ip link set * up, /usr/bin/ip link set * down, /usr/bin/tee /sys/bus/usb/devices/*/authorized, /usr/bin/tee /sys/bus/usb/devices/*/disable
 EOF
 sudo chmod 0440 /etc/sudoers.d/agent_terrain_watchdog && sudo visudo -c
 

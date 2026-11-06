@@ -8,6 +8,9 @@ Raspberry Pi itself being stuck. A plain `sudo reboot` recovers the situation
 because it forces a USB power cycle of the module.
 
 This module reproduces the effect of that reboot *without* restarting the Pi:
+  0. If the modem has vanished from USB altogether -> power-cycle the USB port
+     it hangs from, the software equivalent of unplugging and replugging the
+     cable (see _usb_port_cycle)
   1. Periodic ping of a reliable server (8.8.8.8), bound to the identified 4G
      interface (never a "general" ping, which could travel over Ethernet or Wi-Fi).
      Every 30 min while the link is healthy, every 30 s as soon as a ping fails,
@@ -41,6 +44,7 @@ import glob
 import logging
 
 from utils.alerting import write_alert
+from utils.configs import LOG_DIR
 
 logger = logging.getLogger("ModemWatchdog")
 
@@ -74,6 +78,14 @@ MODEM_INTERFACES = ["usb0", "wwan0", "eth1"]
 # modems (qmi_wwan/cdc_ether/...). More robust than a fixed list of names, which
 # may stop matching after a USB re-enumeration or depending on the modem mode.
 MODEM_DRIVER_HINTS = ("qmi_wwan", "cdc_ether", "cdc_ncm", "rndis_host", "cdc_mbim")
+
+# USB vendor IDs of the supported modems (SIM7600 1e0e, Quectel 2c7c, Huawei
+# 12d1, ZTE 1bc7)
+MODEM_USB_VENDORS = ("1e0e", "2c7c", "12d1", "1bc7")
+
+# Root USB port the modem was last seen on, kept on disk: when the modem has
+# vanished from USB, nothing in /sys says any more where it was plugged.
+MODEM_PORT_FILE = os.path.join(LOG_DIR, ".modem_usb_port")
 
 # AT serial port of the modem (the SIM7600 exposes several /dev/ttyUSB*, 2 is the AT port)
 AT_SERIAL_CANDIDATES = [
@@ -187,6 +199,7 @@ class ModemWatchdog(threading.Thread):
                             f"(after {self._failure_count} failures)"
                         )
                     self._failure_count = 0
+                    self._remember_modem_port()
                     self._wait(self.check_interval)
                 else:
                     # Capped at max_failures: beyond that the number carries no
@@ -342,6 +355,23 @@ class ModemWatchdog(threading.Thread):
         # Never cut the interface or the modem in the middle of an SFTP transfer.
         self._wait_for_upload_idle()
 
+        # Step 0: the modem has vanished from USB altogether. Every step below
+        # needs it on the bus (interface, /sys device, AT port), so none of them
+        # can do anything. Seen on 26/10/2026: the hub carrying the modem
+        # stopped answering (`device not accepting address, error -71`) and the
+        # station stayed offline 11 days, until the USB cable was replugged by
+        # hand -- the modem has its own power supply and had not crashed.
+        if not self._modem_on_usb():
+            logger.info("[Watchdog] Step 0 -- modem absent from USB, power-cycling its USB port...")
+            if self._usb_port_cycle():
+                # ~60s: re-enumeration, ModemManager probing and LTE attachment.
+                # After the manual replug the IP came back in about 20s.
+                if self._wait_and_check(max_wait=60):
+                    logger.info("[Watchdog] ✅ Recovery step 0 succeeded (USB port power cycle).")
+                    self._failure_count = 0
+                    self._consecutive_total_failures = 0
+                    return True
+
         # Step 1: restart the network interface
         iface = self._find_modem_interface()
         if iface:
@@ -460,6 +490,84 @@ class ModemWatchdog(threading.Thread):
             f"drivers: {MODEM_DRIVER_HINTS})"
         )
         return None
+
+    def _modem_usb_devices(self) -> list[str]:
+        """Names (e.g. "3-1.1") of the USB devices that are a supported modem."""
+        found = []
+        for vendor_path in glob.glob("/sys/bus/usb/devices/*/idVendor"):
+            try:
+                with open(vendor_path) as f:
+                    if f.read().strip().lower() in MODEM_USB_VENDORS:
+                        found.append(os.path.basename(os.path.dirname(vendor_path)))
+            except OSError:
+                continue
+        return found
+
+    def _modem_on_usb(self) -> bool:
+        return bool(self._modem_usb_devices())
+
+    def _remember_modem_port(self):
+        """Write down the root USB port of the modem while it is visible.
+
+        Device "3-1.1" hangs from port 1 of root hub usb3 (through a hub at
+        "3-1"): cycling that root port drops and re-enumerates the whole branch,
+        hub included."""
+        devices = self._modem_usb_devices()
+        if not devices:
+            return
+        bus, _, chain = devices[0].partition("-")
+        port = f"/sys/bus/usb/devices/usb{bus}/{bus}-0:1.0/usb{bus}-port{chain.split('.')[0]}"
+        try:
+            with open(MODEM_PORT_FILE) as f:
+                if f.read().strip() == port:
+                    return
+        except OSError:
+            pass
+        try:
+            with open(MODEM_PORT_FILE, "w") as f:
+                f.write(port + "\n")
+            logger.info(f"[Watchdog] Modem USB port recorded: {port}")
+        except OSError as exc:
+            logger.warning(f"[Watchdog] Could not record the modem USB port: {exc}")
+
+    def _usb_port_cycle(self) -> bool:
+        """Power the modem's USB port off and on again through its `disable`
+        attribute in /sys, as if the cable had been unplugged and replugged.
+
+        Targets the port recorded by _remember_modem_port(). If none was ever
+        recorded, every root-hub port with nothing attached is cycled instead
+        -- the port of a device that failed to enumerate shows as empty, and
+        cycling an empty port disturbs nothing. Requires sudo, restricted
+        through sudoers to `tee` on these paths."""
+        ports = []
+        try:
+            with open(MODEM_PORT_FILE) as f:
+                ports = [f.read().strip()]
+        except OSError:
+            ports = [
+                os.path.dirname(p)
+                for p in glob.glob("/sys/bus/usb/devices/usb*/*-0:1.0/usb*-port*/disable")
+                if not os.path.exists(os.path.join(os.path.dirname(p), "device"))
+            ]
+        ports = [p for p in ports if os.path.exists(os.path.join(p, "disable"))]
+        if not ports:
+            logger.warning("[Watchdog] USB port cycle: no USB port to cycle found in /sys")
+            return False
+
+        ok = True
+        for port in ports:
+            path = os.path.join(port, "disable")
+            logger.info(f"[Watchdog] USB port cycle through: {path}")
+            r1 = subprocess.run(["sudo", "tee", path], input=b"1\n", timeout=5, capture_output=True)
+            time.sleep(3)
+            r0 = subprocess.run(["sudo", "tee", path], input=b"0\n", timeout=5, capture_output=True)
+            if r1.returncode != 0 or r0.returncode != 0:
+                logger.error(
+                    f"[Watchdog] USB port cycle: sudo tee write failed on {path} "
+                    f"(codes {r1.returncode}/{r0.returncode}) -- is the sudoers rule installed?"
+                )
+                ok = False
+        return ok
 
     def _restart_network_interface(self, iface: str) -> bool:
         """ip link set <iface> down/up."""
@@ -677,3 +785,19 @@ class ModemWatchdog(threading.Thread):
             f"Modem: {connected} | "
             f"Recoveries: {self._recovery_count}"
         )
+
+
+if __name__ == "__main__":
+    # Manual test of step 0 on a station, agent stopped or not:
+    #   .venv/bin/python -m utils.modem_watchdog --usb-port-cycle
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if sys.argv[1:] == ["--usb-port-cycle"]:
+        wd = ModemWatchdog()
+        wd._remember_modem_port()
+        print(f"modem on USB before: {wd._modem_usb_devices()}")
+        print(f"port cycle: {'ok' if wd._usb_port_cycle() else 'FAILED'}")
+        print(f"modem back, connectivity: {'ok' if wd._wait_and_check(max_wait=60) else 'NOT RESTORED'}")
+        print(f"modem on USB after: {wd._modem_usb_devices()}")
+    else:
+        print("usage: python -m utils.modem_watchdog --usb-port-cycle")

@@ -240,7 +240,7 @@ SUDOERS_FILE="/etc/sudoers.d/agent_terrain_watchdog"
 SUDOERS_TMP="$(mktemp)"
 cat > "$SUDOERS_TMP" <<EOF
 # Permissions for the Agent Alpha 1 watchdog (strict minimum only)
-${USER_NAME_TMP} ALL=(root) NOPASSWD: /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/ip link set * up, /usr/bin/ip link set * down, /usr/bin/tee /sys/bus/usb/devices/*/authorized, /usr/sbin/reboot, /sbin/reboot
+${USER_NAME_TMP} ALL=(root) NOPASSWD: /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/ip link set * up, /usr/bin/ip link set * down, /usr/bin/tee /sys/bus/usb/devices/*/authorized, /usr/bin/tee /sys/bus/usb/devices/*/disable, /usr/sbin/reboot, /sbin/reboot
 EOF
 if visudo -c -f "$SUDOERS_TMP" >/dev/null 2>&1; then
     install -m 0440 "$SUDOERS_TMP" "$SUDOERS_FILE"
