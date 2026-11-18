@@ -148,6 +148,33 @@ else
     echo -e "${GREEN}✓ Snapshot mode selected (JPEG over 4G only).${NC}"
 fi
 
+# -> Raw snapshots (training data, see SAVE_RAW_SNAPSHOTS in utils/configs.py).
+# Only the snapshot modes produce snapshots, hence nothing to ask in video mode.
+if [ "$AGENT_MODE_CHOICE" -ne 1 ]; then
+    echo -e "\n${YELLOW}--- Raw snapshots (training data) ---${NC}"
+    echo "Keeps the clean frame and a YOLO pre-annotation of every snapshot in raw/,"
+    echo "to fine-tune the models on this site (about 150-250 KB per snapshot)."
+    read -p "Keep raw snapshots? [Y/n]: " KEEP_RAW
+    KEEP_RAW=${KEEP_RAW:-Y}
+    if [[ "$KEEP_RAW" =~ ^[Nn]$ ]]; then
+        sed -i "s/^SAVE_RAW_SNAPSHOTS = .*/SAVE_RAW_SNAPSHOTS = False/" utils/configs.py
+        echo -e "${GREEN}✓ Raw snapshots disabled.${NC}"
+    else
+        sed -i "s/^SAVE_RAW_SNAPSHOTS = .*/SAVE_RAW_SNAPSHOTS = True/" utils/configs.py
+        UPLOAD_RAW=n
+        if [ "$OFFLINE" != true ]; then
+            read -p "Also send them to the NAS? (about 4x the 4G volume, deleted from the SD card once sent) [y/N]: " UPLOAD_RAW
+        fi
+        if [[ "$UPLOAD_RAW" =~ ^[Yy]$ ]]; then
+            sed -i "s/^UPLOAD_RAW_SNAPSHOTS = .*/UPLOAD_RAW_SNAPSHOTS = True/" utils/configs.py
+            echo -e "${GREEN}✓ Raw snapshots kept and sent to the NAS.${NC}"
+        else
+            sed -i "s/^UPLOAD_RAW_SNAPSHOTS = .*/UPLOAD_RAW_SNAPSHOTS = False/" utils/configs.py
+            echo -e "${GREEN}✓ Raw snapshots kept on the SD card only.${NC}"
+        fi
+    fi
+fi
+
 # -> GSM / 4G Connection Config (Optional)
 echo -e "\n${YELLOW}--- GSM / 4G connection setup ---${NC}"
 if [ "$OFFLINE" = true ]; then

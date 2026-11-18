@@ -21,7 +21,7 @@ from utils.configs import (
     CAMERA_HAUTEUR_M, CAMERA_TANGAGE_DEG, CAMERA_FOCALE_MM, CAMERA_CAPTEUR_MM,
     TRACKER_CONFIG_DAY, TRACKER_CONFIG_NIGHT,
     CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour, OFFLINE_MODE,
-    SAVE_RAW_SNAPSHOTS, RAW_DIR
+    SAVE_RAW_SNAPSHOTS, RAW_DIR, UPLOAD_RAW_SNAPSHOTS
 )
 from utils.logging_utils import (CSVLogger, PerformanceLogger, read_cpu_temp_c,
                                  write_session_metadata)
@@ -180,7 +180,7 @@ class TestAgent:
             # Using capture_file while already reading "main" arrays deadlocks libcamera
             hires = self.active_cam_thread.picam.capture_array("main")
             if SAVE_RAW_SNAPSHOTS:
-                self._save_raw_snapshot(hires, results, f"cam{self.active_cam_idx}_{ts}")
+                self._save_raw_snapshot(hires, results, f"cam{self.active_cam_idx}_{ts}_raw")
             # The camera outputs BGR and OpenCV expects BGR. No conversion.
             cv2.imwrite(snap_path, hires, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
@@ -234,10 +234,15 @@ class TestAgent:
         so a moving object may sit slightly off its box -- to be corrected
         during annotation, like any pre-annotation."""
         try:
-            cv2.imwrite(os.path.join(RAW_DIR, f"{name}.jpg"), hires, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            with open(os.path.join(RAW_DIR, f"{name}.txt"), "w") as f:
+            img_path = os.path.join(RAW_DIR, f"{name}.jpg")
+            label_path = os.path.join(RAW_DIR, f"{name}.txt")
+            cv2.imwrite(img_path, hires, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            with open(label_path, "w") as f:
                 for cls_id, (cx, cy, w, h) in zip(results.boxes.cls.tolist(), results.boxes.xywhn.tolist()):
                     f.write(f"{int(cls_id)} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+            if UPLOAD_RAW_SNAPSHOTS:
+                self.sftp.upload_file(img_path)
+                self.sftp.upload_file(label_path)
         except Exception as e:
             print(f"⚠️ Raw snapshot error: {e}")
 

@@ -143,6 +143,12 @@ OFFLINE_MODE = False
 # SD card only, never uploaded. About 150-250 KB per snapshot.
 SAVE_RAW_SNAPSHOTS = True
 
+# Also send the raw snapshots to the NAS (with the scheduled sends), where they
+# land next to the annotated ones under the name <name>_raw.jpg/.txt. Once
+# uploaded they are deleted from the SD card, like every other uploaded file.
+# Roughly 4 times the 4G volume of the annotated snapshots alone.
+UPLOAD_RAW_SNAPSHOTS = False
+
 # --- Local Storage ---
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
