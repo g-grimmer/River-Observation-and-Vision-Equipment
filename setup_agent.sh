@@ -87,15 +87,30 @@ if [[ "$UPDATE_CONFIG" =~ ^[Yy]$ ]]; then
     read -s NAS_PASS
     echo ""
     read -p "NAS Remote Path [/backups/agent_terrain]: " NAS_PATH
-    NAS_PATH=${NAS_PATH:-"backups/agent_terrain"}
+    NAS_PATH=${NAS_PATH:-"/backups/agent_terrain"}
 
     CONFIG_FILE="utils/configs.py"
+
+    # Write KEY = "VALUE" into configs.py. The value is escaped twice: for the
+    # Python string literal (\ and "), then for the sed replacement (\, | and
+    # &). A plain s/.../.../ broke on the first / of the NAS path ("unknown
+    # option to `s'"), left SFTP_REMOTE_DIR empty and still printed "Updated".
+    set_config() {
+        local value=${2//\\/\\\\}
+        value=${value//\"/\\\"}
+        local expected="$1 = \"$value\""
+        value=$(printf '%s' "$value" | sed -e 's/[\\|&]/\\&/g')
+        sed -i "s|^$1 = .*|$1 = \"$value\"|" "$CONFIG_FILE"
+        grep -Fqx -- "$expected" "$CONFIG_FILE"
+    }
+
     if [ -f "$CONFIG_FILE" ]; then
-        sed -i "s/SFTP_HOST = .*/SFTP_HOST = \"$NAS_HOST\"/" $CONFIG_FILE
-        sed -i "s/SFTP_USERNAME = .*/SFTP_USERNAME = \"$NAS_USER\"/" $CONFIG_FILE
-        sed -i "s/SFTP_PASSWORD = .*/SFTP_PASSWORD = \"$NAS_PASS\"/" $CONFIG_FILE
-        sed -i "s/SFTP_REMOTE_DIR = .*/SFTP_REMOTE_DIR = \"$NAS_PATH\"/" $CONFIG_FILE
-        echo -e "${GREEN}✓ Updated $CONFIG_FILE${NC}"
+        if set_config SFTP_HOST "$NAS_HOST" && set_config SFTP_USERNAME "$NAS_USER" \
+                && set_config SFTP_PASSWORD "$NAS_PASS" && set_config SFTP_REMOTE_DIR "$NAS_PATH"; then
+            echo -e "${GREEN}✓ Updated $CONFIG_FILE${NC}"
+        else
+            echo -e "${RED}Error: could not write the NAS settings into $CONFIG_FILE -- fill them in by hand.${NC}"
+        fi
     else
         echo -e "${RED}Warning: $CONFIG_FILE not found, skipping update.${NC}"
     fi
