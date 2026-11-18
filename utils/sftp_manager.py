@@ -9,7 +9,7 @@ import time
 from typing import Optional
 from utils.configs import (
     SFTP_HOST, SFTP_PORT, SFTP_USERNAME, SFTP_PASSWORD, SFTP_REMOTE_DIR,
-    LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, UPLOAD_SCHEDULE,
+    LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, UPLOAD_SCHEDULE, OFFLINE_MODE,
 )
 
 
@@ -26,7 +26,8 @@ class SFTPManager:
         # sans ce message l'agent tournait normalement et accumulait tout sur la
         # carte SD, sans que rien ne signale que le NAS ne recevait rien.
         self._configured = bool(self.host and self.username)
-        if not self._configured:
+        self.offline = OFFLINE_MODE
+        if not self._configured and not self.offline:
             print(
                 "\u26a0\ufe0f [Upload] Identifiants NAS absents (SFTP_HOST/SFTP_USERNAME "
                 "vides dans utils/configs.py) : aucun transfert ne sera tente, les "
@@ -58,6 +59,15 @@ class SFTPManager:
         # without this a send could start on a modem frozen since the last ping.
         self.before_send = None
         self.PRE_SEND_CHECK_MINUTES = 5
+
+        # Offline mode: no thread, no network probe; upload_file() leaves every
+        # file where it is.
+        if self.offline:
+            print(
+                "📴 [Upload] Offline mode (OFFLINE_MODE): nothing is sent, the "
+                "files stay in logs/ and videos/ until collected on site."
+            )
+            return
 
         # Detect the available upload method.
         # Priority: rsync (resumes interrupted transfers) > paramiko SFTP (fallback).
@@ -130,6 +140,8 @@ class SFTPManager:
         if not os.path.exists(local_path):
             print(f"⚠️ [Upload] File not found: {local_path}")
             return False
+        if self.offline:
+            return True
         if self.schedule:
             return self._move_to_outbox(local_path)
         return self._enqueue(local_path)

@@ -20,7 +20,7 @@ from utils.configs import (
     VIDEO_EXTENSION, CAMERA_IDS, MODEL_PATH_DAY, MODEL_PATH_NIGHT, IMGSZ, CAPTURE_FPS,
     CAMERA_HAUTEUR_M, CAMERA_TANGAGE_DEG, CAMERA_FOCALE_MM, CAMERA_CAPTEUR_MM,
     TRACKER_CONFIG_DAY, TRACKER_CONFIG_NIGHT,
-    CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour
+    CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour, OFFLINE_MODE
 )
 from utils.logging_utils import (CSVLogger, PerformanceLogger, read_cpu_temp_c,
                                  write_session_metadata)
@@ -97,9 +97,14 @@ class TestAgent:
 
         # 4G watchdog -- monitors connectivity and tries to recover the modem
         # without rebooting when it freezes (steady red LEDs)
-        self.modem_watchdog = ModemWatchdog(sftp_manager=self.sftp)
-        self.modem_watchdog.start()
-        self.sftp.before_send = self.modem_watchdog.request_check
+        # Not started in offline mode: without coverage it would repair a
+        # healthy modem in a loop (see OFFLINE_MODE in utils/configs.py).
+        if OFFLINE_MODE:
+            self.modem_watchdog = None
+        else:
+            self.modem_watchdog = ModemWatchdog(sftp_manager=self.sftp)
+            self.modem_watchdog.start()
+            self.sftp.before_send = self.modem_watchdog.request_check
         self.logger = None
         self.perf_logger = None
         self.tracker = None

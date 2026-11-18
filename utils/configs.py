@@ -126,6 +126,15 @@ ROTATION_MINUTES = 5  # Duration of each video sequence (minutes)
 # original behaviour: every file is sent as soon as its session closes.
 UPLOAD_SCHEDULE = ["00:00", "08:00", "16:00"]
 
+# --- Offline mode ---
+# For a site without mobile coverage. True: no upload and no modem watchdog --
+# the watchdog would take the missing network for a modem fault, repair it in a
+# loop and, with the reboot right installed by setup_agent.sh, reboot the Pi
+# about every 10 minutes. Files stay in logs/ and videos/ until collected on
+# site. The disk cleaner still deletes the oldest files above 80 %: plan the
+# visits before the card fills up.
+OFFLINE_MODE = False
+
 # --- Local Storage ---
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 LOG_DIR = os.path.join(BASE_DIR, "logs")

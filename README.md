@@ -176,6 +176,7 @@ The defaults are bench values. Counts and trajectories stay valid without them, 
 | Parameter                   | Default                 | Description                             | Recommended values                           |
 | --------------------------- | ----------------------- | --------------------------------------- | -------------------------------------------- |
 | `ROTATION_MINUTES`          | `5`                     | session length                          | `5` (4G) / `15` (WiFi)                       |
+| `OFFLINE_MODE`              | `False`                 | site without mobile coverage: no upload, no modem watchdog, files kept on the SD card | `True` only where there is no network |
 | `UPLOAD_SCHEDULE`           | `["00:00", "08:00", "16:00"]` | times of the 4G sends; closed files wait in `outbox/` in between, alerts included | `[]` = send each file as soon as its session closes |
 | `CONFIDENCE`                | `0.40`                  | detector threshold                      | best count on the full pipeline (100 % by day, 45.5 % at night vs 94.1 % / 27.3 % at 0.10) |
 | `VIDEO_FPS` / `CAPTURE_FPS` | `3.0`                   | acquisition and analysis rate           | `3` (333 ms per frame budget)                |
