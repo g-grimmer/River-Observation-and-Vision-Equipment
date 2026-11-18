@@ -57,12 +57,29 @@ if [ ! -z "$NEW_HOSTNAME" ] && [ "$NEW_HOSTNAME" != "$CURRENT_HOSTNAME" ]; then
     CURRENT_HOSTNAME=$NEW_HOSTNAME
 fi
 
+# -> Network coverage (offline mode)
+echo -e "\n${YELLOW}--- Network coverage ---${NC}"
+echo "Without mobile coverage the station runs in offline mode: no upload and no"
+echo "modem watchdog, the data stay on the SD card until collected on site."
+read -p "Does the site have mobile (4G) coverage? [Y/n]: " HAS_COVERAGE
+HAS_COVERAGE=${HAS_COVERAGE:-Y}
+OFFLINE=false
+if [[ "$HAS_COVERAGE" =~ ^[Nn]$ ]]; then
+    OFFLINE=true
+    sed -i "s/^OFFLINE_MODE = .*/OFFLINE_MODE = True/" utils/configs.py
+    echo -e "${GREEN}✓ Offline mode enabled (OFFLINE_MODE = True in utils/configs.py): NAS and 4G setup skipped.${NC}"
+fi
+
 # -> NAS Config (Optional Update)
 echo -e "\n${YELLOW}--- NAS / SFTP Configuration ---${NC}"
 # Defaut OUI : les valeurs sont vides dans le depot (voir utils/configs.py),
 # repondre non produit une station qui enregistre mais ne transmet jamais.
-read -p "Renseigner les identifiants NAS / SFTP dans utils/configs.py ? [Y/n]: " UPDATE_CONFIG
-UPDATE_CONFIG=${UPDATE_CONFIG:-Y}
+if [ "$OFFLINE" = true ]; then
+    UPDATE_CONFIG=n
+else
+    read -p "Renseigner les identifiants NAS / SFTP dans utils/configs.py ? [Y/n]: " UPDATE_CONFIG
+    UPDATE_CONFIG=${UPDATE_CONFIG:-Y}
+fi
 if [[ "$UPDATE_CONFIG" =~ ^[Yy]$ ]]; then
     read -p "NAS IP Address: " NAS_HOST
     read -p "NAS Username: " NAS_USER
@@ -118,7 +135,11 @@ fi
 
 # -> GSM / 4G Connection Config (Optional)
 echo -e "\n${YELLOW}--- GSM / 4G connection setup ---${NC}"
-read -p "Enable and configure the GSM / 4G connection? (y/N): " SETUP_GSM
+if [ "$OFFLINE" = true ]; then
+    SETUP_GSM=n
+else
+    read -p "Enable and configure the GSM / 4G connection? (y/N): " SETUP_GSM
+fi
 if [[ "$SETUP_GSM" =~ ^[Yy]$ ]]; then
     echo -e "${BLUE}>>> Installing NetworkManager and ModemManager...${NC}"
     apt-get update
