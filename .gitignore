@@ -5,4 +5,5 @@ __pycache__/
 logs/
 videos/
 outbox/
+raw/
 data_pipeline/

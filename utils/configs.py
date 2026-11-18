@@ -135,15 +135,25 @@ UPLOAD_SCHEDULE = ["00:00", "08:00", "16:00"]
 # visits before the card fills up.
 OFFLINE_MODE = False
 
+# --- Raw snapshots (training data for a new site) ---
+# The snapshot sent to the NAS has the boxes and the timestamp drawn into the
+# pixels, so it cannot be used to train or fine-tune a model. With True, every
+# snapshot also keeps the clean frame and a YOLO label file pre-filled by the
+# detector (raw/<name>.jpg + .txt), ready to be corrected in CVAT. Kept on the
+# SD card only, never uploaded. About 150-250 KB per snapshot.
+SAVE_RAW_SNAPSHOTS = True
+
 # --- Local Storage ---
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 OUTBOX_DIR = os.path.join(BASE_DIR, "outbox")
+RAW_DIR = os.path.join(BASE_DIR, "raw")
 
 # Ensure dirs exist
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTBOX_DIR, exist_ok=True)
+os.makedirs(RAW_DIR, exist_ok=True)
 
 # --- SFTP Configuration ---
 # Intentionally blank in the repository. These four values are filled in at

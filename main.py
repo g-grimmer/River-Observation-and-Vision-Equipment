@@ -20,7 +20,8 @@ from utils.configs import (
     VIDEO_EXTENSION, CAMERA_IDS, MODEL_PATH_DAY, MODEL_PATH_NIGHT, IMGSZ, CAPTURE_FPS,
     CAMERA_HAUTEUR_M, CAMERA_TANGAGE_DEG, CAMERA_FOCALE_MM, CAMERA_CAPTEUR_MM,
     TRACKER_CONFIG_DAY, TRACKER_CONFIG_NIGHT,
-    CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour, OFFLINE_MODE
+    CONFIDENCE, VIDEO_DIR, LOG_DIR, OUTBOX_DIR, ROTATION_MINUTES, est_jour, OFFLINE_MODE,
+    SAVE_RAW_SNAPSHOTS, RAW_DIR
 )
 from utils.logging_utils import (CSVLogger, PerformanceLogger, read_cpu_temp_c,
                                  write_session_metadata)
@@ -178,6 +179,8 @@ class TestAgent:
             # --- Capture through an array, to avoid the picamera2 deadlock ---
             # Using capture_file while already reading "main" arrays deadlocks libcamera
             hires = self.active_cam_thread.picam.capture_array("main")
+            if SAVE_RAW_SNAPSHOTS:
+                self._save_raw_snapshot(hires, results, f"cam{self.active_cam_idx}_{ts}")
             # The camera outputs BGR and OpenCV expects BGR. No conversion.
             cv2.imwrite(snap_path, hires, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
@@ -220,6 +223,23 @@ class TestAgent:
             print(f"⚠️ Snapshot error: {e}")
             import traceback
             traceback.print_exc()
+
+    def _save_raw_snapshot(self, hires, results, name):
+        """Keep the clean frame and its pre-annotation in RAW_DIR, never uploaded.
+
+        The label file is in YOLO format (class cx cy w h, normalised), taken
+        from the boxes of the inferred frame: the same 16:9 framing as the
+        hi-res frame, so the normalised coordinates carry over as they are. The
+        hi-res frame is captured a fraction of a second after the inferred one,
+        so a moving object may sit slightly off its box -- to be corrected
+        during annotation, like any pre-annotation."""
+        try:
+            cv2.imwrite(os.path.join(RAW_DIR, f"{name}.jpg"), hires, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            with open(os.path.join(RAW_DIR, f"{name}.txt"), "w") as f:
+                for cls_id, (cx, cy, w, h) in zip(results.boxes.cls.tolist(), results.boxes.xywhn.tolist()):
+                    f.write(f"{int(cls_id)} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+        except Exception as e:
+            print(f"⚠️ Raw snapshot error: {e}")
 
     # -----------------------------------------------------------------------
     # Video helpers
@@ -279,7 +299,7 @@ class TestAgent:
         if old_meta: self.sftp.upload_file(old_meta)
 
         # Automatic disk cleanup, to avoid 24/7 saturation
-        cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
+        cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR, RAW_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
         self._start_session()
 
@@ -369,7 +389,7 @@ class TestAgent:
                 if old_perf: self.sftp.upload_file(old_perf)
 
                 # Automatic disk cleanup
-                cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
+                cleanup_old_files([VIDEO_DIR, LOG_DIR, OUTBOX_DIR, RAW_DIR], max_usage_percent=80.0, target_usage_percent=75.0)
 
             if self.active_cam_thread:
                 self.active_cam_thread.stop()
