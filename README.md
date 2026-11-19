@@ -100,6 +100,7 @@ The wizard will:
 *   Offer a choice of **4G upload mode** (see next section).
 *   Offer automatic **GSM / 4G configuration** (NetworkManager, ModemManager, APN, SIM PIN).
 *   Lift the USB current limits in `/boot/firmware/config.txt` for the modem.
+*   Enable charging of the official rechargeable **RTC battery** (ML-2020) on request, so that the clock survives power cuts without network.
 *   Install `rsync`, `sshpass` and the **camera stack** `python3-picamera2`.
 *   Create the Python environment and install `requirements.txt`.
 *   Write a **restricted** `sudoers` rule for the watchdog (never a full shell).

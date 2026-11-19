@@ -234,6 +234,31 @@ if [ "$CONFIG_MODIFIED" -eq 0 ]; then
     echo -e "${YELLOW}⚠ config.txt not found, cannot lift the USB power limits.${NC}"
 fi
 
+# -> RTC battery. Keeps the clock running while the Pi is unpowered (solar
+# station flat in winter), so that it boots at the right time without network:
+# timestamps and the day/night camera choice depend on it. Charging is enabled
+# only on an explicit yes: on a non-rechargeable cell (CR2032...) it would make
+# the cell leak or swell, and the script cannot tell which cell is fitted.
+echo -e "\n${YELLOW}--- RTC battery ---${NC}"
+if [ "$OFFLINE" = true ]; then
+    echo -e "${YELLOW}Offline site: without network the clock can only be kept by an RTC battery.${NC}"
+fi
+read -p "Official RECHARGEABLE Raspberry Pi RTC battery (Panasonic ML-2020) fitted or to be fitted? [y/N]: " RTC_BATTERY
+if [[ "$RTC_BATTERY" =~ ^[Yy]$ ]]; then
+    for CFG_FILE in "/boot/firmware/config.txt" "/boot/config.txt"; do
+        if [ -f "$CFG_FILE" ]; then
+            if ! grep -q "^dtparam=rtc_bbat_vchg=" "$CFG_FILE"; then
+                echo "dtparam=rtc_bbat_vchg=3000000" >> "$CFG_FILE"
+            fi
+            echo -e "${GREEN}✓ RTC battery charging enabled in $CFG_FILE (applied at next boot).${NC}"
+            echo -e "${YELLOW}  Set the clock once on site: sudo date -u -s '<UTC time>' && sudo hwclock --systohc${NC}"
+            break
+        fi
+    done
+else
+    echo -e "${GREEN}✓ RTC battery charging left disabled.${NC}"
+fi
+
 # --- 5. System dependencies (rsync + sshpass) ---
 echo -e "\n${BLUE}>>> Installing the system dependencies...${NC}"
 # rsync is generally pre-installed on Raspberry Pi OS.
